@@ -5,8 +5,11 @@ app:
 text:
   enable_spacy: true
   max_doc_length: 10000
-  mask_style: "brackets"  # options: brackets, asterisks, synthetic
+  mask_style: "faker"  # options: brackets, asterisks, synthetic, faker
   confidence_threshold: 0.45
+  faker_locale: "en_US"
+  static_replacements:
+    "Internal Project Alpha": "Public Project Beta"
   regex_entities:
     - name: "email"
       pattern: "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"
@@ -17,12 +20,37 @@ text:
     - name: "credit_card"
       pattern: "\\b(?:\\d[ -]*?){13,16}\\b"
       action: "mask"
+    - name: "aadhar"
+      pattern: "\\b\\d{4}[\\s-]\\d{4}[\\s-]\\d{4}\\b|\\b\\d{12}\\b|\\b\\d{4}\\b"
+      action: "blur"
+    - name: "dob"
+      pattern: "\\b\\d{2}[/-]\\d{2}[/-]\\d{4}\\b|\\b\\d{4}[/-]\\d{2}[/-]\\d{2}\\b"
+      action: "replace"
+    - name: "address"
+      pattern: "(?i)\\b(?:House|Plot|H\\.No|Sector|Phase|Street|Road|City|District|State|Pin)\\b"
+      action: "replace"
+    - name: "numbers"
+      pattern: "\\b\\d{5,}\\b"
+      action: "replace"
+  allowlist:
+    - "TechCorp Solutions Inc."
+    - "VerifiedCheck Services"
+    - "LeakWatch"
+    - "SecureNet Data Vault"
 image:
   face_blur_kernel: 35
   text_detection_langs:
     - "en"
   min_confidence: 0.3
   enable_ocr: true
+  enable_qr: true
+  enable_layout: true
+  enable_mrz: true
+  padding_percent: 0.05
+  default_style: "synthetic"
+  strip_metadata: true
+  only_mitigated_info: false
+  mitigated_labels: null
 explainability:
   save_text_spans: true
   save_image_overlays: true

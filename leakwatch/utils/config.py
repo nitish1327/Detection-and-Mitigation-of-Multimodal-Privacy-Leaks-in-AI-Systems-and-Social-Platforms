@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Union
 
 import yaml
 from pydantic import BaseModel, Field, field_validator
@@ -23,9 +23,12 @@ class RegexEntityConfig(BaseModel):
 class TextConfig(BaseModel):
     enable_spacy: bool = True
     max_doc_length: int = 10000
-    mask_style: str = "brackets"
+    mask_style: str = "brackets"  # options: brackets, asterisks, synthetic, faker
     confidence_threshold: float = 0.5
     regex_entities: list[RegexEntityConfig] = Field(default_factory=list)
+    allowlist: list[str] = Field(default_factory=list)
+    faker_locale: Union[str, list[str]] = "en_US"
+    static_replacements: dict[str, str] = Field(default_factory=dict)
 
 
 class ImageConfig(BaseModel):
@@ -33,6 +36,14 @@ class ImageConfig(BaseModel):
     text_detection_langs: list[str] = Field(default_factory=lambda: ["en"])
     min_confidence: float = 0.3
     enable_ocr: bool = True
+    enable_qr: bool = True
+    enable_layout: bool = True
+    enable_mrz: bool = True
+    padding_percent: float = 0.05
+    default_style: str = "blur"  # options: blur, pixelate, redact, synthetic
+    strip_metadata: bool = True
+    only_mitigated_info: bool = False  # If True, blackout everything except mitigated regions
+    mitigated_labels: list[str] | None = None
 
     @field_validator("face_blur_kernel")
     @classmethod

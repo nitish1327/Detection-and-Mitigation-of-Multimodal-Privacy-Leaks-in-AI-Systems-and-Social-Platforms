@@ -1,0 +1,1 @@
+Hello, my name is John Doe. My email is [REDACTED:EMAIL] and my phone number is +[REDACTED:PHONE]. Please keep this confidential.

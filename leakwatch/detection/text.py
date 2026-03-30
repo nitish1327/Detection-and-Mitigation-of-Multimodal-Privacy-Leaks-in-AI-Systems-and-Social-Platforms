@@ -47,7 +47,13 @@ class TextDetector:
         entities: list[DetectedEntity] = []
         entities.extend(self._spacy_entities(text))
         entities.extend(self._regex_entities(text))
-        return entities
+
+        # Filter out entities that are part of an allowlisted term (case-insensitive)
+        allowlist_lower = [term.lower() for term in self.config.allowlist]
+        return [
+            ent for ent in entities 
+            if not any(ent.text.lower() in term for term in allowlist_lower)
+        ]
 
     def _spacy_entities(self, text: str) -> Iterable[DetectedEntity]:
         if not self._nlp:

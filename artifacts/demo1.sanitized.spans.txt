@@ -1,0 +1,23 @@
+Detected sensitive spans:
+
+- PERSON | mitigation=replace | span=(38, 50)
+  original : Sarah Jenkins
+  sanitized: Ian Martinez
+- ORG_email | mitigation=replace | span=(52, 63)
+  original : s.jenkins@email.com
+  sanitized: <ORG_EMAIL>
+- CARDINAL | mitigation=replace | span=(88, 94)
+  original : 123
+  sanitized: 708454
+- GPE | mitigation=replace | span=(109, 118)
+  original : Springfield
+  sanitized: Haleystad
+- ORG | mitigation=replace | span=(147, 160)
+  original : the Acme Corporation
+  sanitized: Garner-Benson
+- CARDINAL | mitigation=replace | span=(212, 218)
+  original : 555
+  sanitized: 196541
+- CARDINAL | mitigation=replace | span=(220, 226)
+  original : 123
+  sanitized: 708454

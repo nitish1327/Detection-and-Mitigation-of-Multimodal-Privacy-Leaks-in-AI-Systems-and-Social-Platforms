@@ -1,0 +1,8 @@
+Subject: Quarterly Update
+
+Hi [REDACTED:PERSON],
+
+I wanted to quickly share the draft contract. It still includes my personal bank account number [REDACTED:CARDINAL]-[REDACTED:CARDINAL]-210 and the backup card [REDACTED:CREDIT_CARD], so please make sure [REDACTED:ORG] redacts those before forwarding. You can reach me at +[REDACTED:PHONE] or [REDACTED:EMAIL] if anything looks off.
+
+Thanks,
+Nitish

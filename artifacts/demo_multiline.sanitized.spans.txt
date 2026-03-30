@@ -1,0 +1,14 @@
+Detected sensitive spans:
+
+- PERSON | mitigation=replace | span=(26, 39)
+  original : John Doe
+  sanitized: Leslie Miller
+- CARDINAL | mitigation=replace | span=(63, 69)
+  original : 456
+  sanitized: 196685
+- PERSON | mitigation=replace | span=(79, 92)
+  original : Metropolis
+  sanitized: Jodi Mckenzie
+- email | mitigation=mask | span=(122, 141)
+  original : john.doe@metropolis.gov
+  sanitized: ddurham@example.com
