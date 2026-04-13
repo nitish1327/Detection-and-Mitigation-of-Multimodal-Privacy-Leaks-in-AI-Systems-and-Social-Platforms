@@ -96,6 +96,11 @@ class TextMitigator:
         
         # Identity & Contact
         if label in {"PERSON", "NAME"}:
+            gender = entity.metadata.get("gender")
+            if gender == "male":
+                return self.faker.name_male()
+            elif gender == "female":
+                return self.faker.name_female()
             return self.faker.name()
         if label in {"EMAIL", "EMAIL_ADDRESS"}:
             return self.faker.email()
@@ -141,6 +146,8 @@ class TextMitigator:
             return str(self.faker.random_int(min=0, max=999999))
         if label == "LICENSE_PLATE":
             return self.faker.license_plate()
+        if label == "LICENSE":
+            return self.faker.bothify("??## #### #######", letters="ABCDEFGHIJKLMNOPQRSTUVWXYZ")
 
         return f"<{label}>"
 

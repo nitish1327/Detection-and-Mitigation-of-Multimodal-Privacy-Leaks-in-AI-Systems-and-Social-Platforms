@@ -26,6 +26,44 @@ else:  # pragma: no cover
     EasyOcrReader = None  # type: ignore
 
 
+# Document field labels that are structural text, NOT PII values.
+# These should never be mitigated — only the values beside them are sensitive.
+_DOCUMENT_FIELD_LABELS = {
+    # Common ID / driving license fields
+    "name", "full name", "surname", "first name", "last name",
+    "license no", "license no.", "licence no", "licence no.",
+    "license number", "licence number", "dl no", "dl no.",
+    "authorization to drive", "auth to drive",
+    "date of issue", "doi", "issue date",
+    "date of expiry", "doe", "expiry date", "valid till", "valid upto",
+    "dob", "date of birth", "d.o.b", "d.o.b.",
+    "s/w/d", "s/d/w", "s/o", "d/o", "w/o", "c/o",
+    "blood group", "blood grp", "bg",
+    "sex", "gender",
+    "permanent address", "present address", "address",
+    "place of issue", "issuing authority", "issued by",
+    "nationality", "country",
+    "signature", "photograph", "photo",
+    "father's name", "fathers name", "husband's name", "husbands name",
+    "mother's name", "mothers name",
+    # Aadhaar specific
+    "aadhaar", "aadhaar no", "aadhaar number", "uid", "vid",
+    "government of india", "govt of india",
+    "unique identification authority",
+    # Passport fields
+    "passport no", "passport number",
+    "place of birth", "place of issue",
+    # PAN
+    "pan", "pan no", "pan number",
+    "income tax department",
+    # Generic document structure
+    "sr no", "sr no.", "serial no", "serial number",
+    "reg no", "reg no.", "registration no",
+    "class of vehicle", "cov", "type of vehicle",
+    "transport", "non-transport", "non transport",
+}
+
+
 class ImageDetector:
     """Detect faces and sensitive text regions inside images."""
 
@@ -60,19 +98,27 @@ class ImageDetector:
         all_ocr_text = ""
         if self.config.enable_ocr:
             ocr_results = self._get_ocr_results(image)
-            entities.extend(self._process_ocr_results(ocr_results))
             all_ocr_text = " ".join([r[1] for r in ocr_results])
+            
+            detected_gender = None
+            ocr_lower = all_ocr_text.lower()
+            # Explicit gender fields
+            if "Female" in all_ocr_text or "FEMALE" in all_ocr_text or "Gender: F" in all_ocr_text or " sex: f" in ocr_lower:
+                detected_gender = "female"
+            elif "Male" in all_ocr_text or "MALE" in all_ocr_text or "Gender: M" in all_ocr_text or " sex: m" in ocr_lower:
+                detected_gender = "male"
+            # Indian document S/O, D/O, W/O patterns (Son/Daughter/Wife of)
+            elif "s/o" in ocr_lower or "s/w/d" in ocr_lower or "siwid" in ocr_lower or "son of" in ocr_lower:
+                detected_gender = "male"
+            elif "d/o" in ocr_lower or "w/o" in ocr_lower or "daughter of" in ocr_lower or "wife of" in ocr_lower:
+                detected_gender = "female"
+                
+            entities.extend(self._process_ocr_results(ocr_results, detected_gender))
             
             if self.config.enable_mrz:
                 entities.extend(self._detect_mrz(ocr_results))
         
         # Face Detection (last, so we can use OCR context if available)
-        detected_gender = None
-        if "Female" in all_ocr_text or "FEMALE" in all_ocr_text or "Gender: F" in all_ocr_text:
-            detected_gender = "female"
-        elif "Male" in all_ocr_text or "MALE" in all_ocr_text or "Gender: M" in all_ocr_text:
-            detected_gender = "male"
-            
         face_entities = list(self._detect_faces(image))
         if detected_gender:
             for face in face_entities:
@@ -104,22 +150,48 @@ class ImageDetector:
         rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         return self._ocr_reader.readtext(rgb_image)
 
-    def _process_ocr_results(self, ocr_results: List[Tuple[Sequence[Tuple[float, float]], str, float]]) -> List[DetectedEntity]:
-        """Convert OCR results into DetectedEntity objects, routing via TextDetector."""
+    @staticmethod
+    def _is_field_label(text: str) -> bool:
+        """Return True if the OCR text is a document field label, not a PII value."""
+        cleaned = text.strip().lower()
+        # Remove trailing colons/dashes that are common on labels
+        cleaned = cleaned.rstrip(":- .")
+        return cleaned in _DOCUMENT_FIELD_LABELS
+
+    def _process_ocr_results(self, ocr_results: List[Tuple[Sequence[Tuple[float, float]], str, float]], detected_gender: str | None = None) -> List[DetectedEntity]:
+        """Convert OCR results into DetectedEntity objects, routing via TextDetector.
+
+        Field labels (e.g. "NAME", "License No.", "DOB") are skipped so that
+        only the actual PII values beside them are mitigated.
+        """
         results: list[DetectedEntity] = []
         for bbox_points, text, confidence in ocr_results:
             if confidence < self.config.min_confidence:
                 continue
+
+            # Skip structural document field labels — they are NOT PII
+            if self._is_field_label(text):
+                continue
+
             bbox = self._bbox_from_points(bbox_points)
             nested_entities = self._text_detector.detect(text) if self._text_detector else []
             if nested_entities:
                 for nested in nested_entities:
+                    # Also skip if the nested entity text itself is a label
+                    if nested.text and self._is_field_label(nested.text):
+                        continue
+
+                    metadata = nested.metadata.copy()
+                    if detected_gender and nested.label in {"PERSON", "NAME"}:
+                        metadata["gender"] = detected_gender
+
                     results.append(
                         nested.model_copy(
                             update={
                                 "modality": Modality.IMAGE,
                                 "bbox": bbox,
                                 "confidence": float(confidence),
+                                "metadata": metadata,
                             }
                         )
                     )
