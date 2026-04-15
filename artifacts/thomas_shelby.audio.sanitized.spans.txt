@@ -1,0 +1,8 @@
+Detected sensitive spans:
+
+- PERSON | mitigation=mask | span=(11, 26)
+  original : Thomas Shelby
+  sanitized: Lauren Martinez
+- ORG | mitigation=mask | span=(64, 89)
+  original : Derby Die
+  sanitized: s Bailey, Tyler and Schul
