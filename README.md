@@ -52,7 +52,7 @@ tests/
   # Scan an image
   D:/Capstone/.venv/Scripts/python.exe -m leakwatch scan-image path/to/photo.jpg
 
-  # Scan audio (expects a sibling .txt transcript; toggled via config.audio.enabled)
+  # Scan audio (expects a sibling .txt transcript; outputs beeped .sanitized.wav)
   D:/Capstone/.venv/Scripts/python.exe -m leakwatch scan-audio path/to/recording.wav
 
   # Scan video (extracts sparse frames and sanitizes them via the image pipeline)
@@ -63,7 +63,11 @@ tests/
   ```
 
 ### Sample Media Assets
-- Audio: `samples/audio/demo_call.wav` (plus transcript) demonstrates the `scan-audio` flow; regenerate via `python scripts/generate_demo_media.py` if needed.
+- Audio: `samples/audio/demo_call.wav` (plus transcript `demo_call.txt`) demonstrates the `scan-audio` flow. The pipeline emits:
+  - `*.audio.sanitized.txt` (sanitized transcript)
+  - `*.audio.beeps.json` (beep windows)
+  - `*.sanitized.wav` (audio with sensitive ranges replaced by tone)
+  Regenerate media via `python scripts/generate_demo_media.py` if needed.
 - Video: `samples/video/demo_clip.mp4` contains synthetic frames with visible text, ideal for `scan-video` walkthroughs.
 
 ## REST API Middleware

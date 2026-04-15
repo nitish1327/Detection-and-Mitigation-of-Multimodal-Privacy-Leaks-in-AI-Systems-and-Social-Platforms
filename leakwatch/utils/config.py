@@ -52,6 +52,14 @@ class ModalityToggle(BaseModel):
     enabled: bool = False
 
 
+class AudioConfig(ModalityToggle):
+    transcript_extension: str = ".txt"
+    beep_frequency_hz: float = 1000.0
+    beep_amplitude: float = 0.85
+    min_beep_ms: int = 120
+    padding_ms: int = 80
+
+
 class AppConfig(BaseModel):
     mode: str = "cli"
     output_dir: Path = Path("artifacts")
@@ -62,7 +70,7 @@ class LeakWatchConfig(BaseModel):
     text: TextConfig = Field(default_factory=TextConfig)
     image: ImageConfig = Field(default_factory=ImageConfig)
     explainability: ExplainabilityConfig = Field(default_factory=ExplainabilityConfig)
-    audio: ModalityToggle = Field(default_factory=ModalityToggle)
+    audio: AudioConfig = Field(default_factory=AudioConfig)
     video: ModalityToggle = Field(default_factory=ModalityToggle)
 
     @classmethod

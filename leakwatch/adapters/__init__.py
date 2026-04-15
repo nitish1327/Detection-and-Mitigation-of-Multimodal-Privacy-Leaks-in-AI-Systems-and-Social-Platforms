@@ -28,11 +28,9 @@ class AudioAdapter:
 			LOGGER.info("Using companion transcript for audio: %s", transcript_candidate.name)
 			return transcript_candidate.read_text(encoding="utf-8")
 
-		LOGGER.warning(
-			"No transcript found for %s. Integrate a speech-to-text service here in future phases.",
-			path.name,
+		raise RuntimeError(
+			f"No transcript found for {path.name}. Expected companion file: {transcript_candidate.name}"
 		)
-		return ""
 
 
 class VideoAdapter:
