@@ -46,6 +46,7 @@ class ExplainabilityConfig(BaseModel):
     save_text_spans: bool = True
     save_image_overlays: bool = True
     audit_log_path: Path = Path("artifacts/audit.log")
+    audit_span_text_policy: str = "plain"  # options: plain, hash
 
 
 class ModalityToggle(BaseModel):

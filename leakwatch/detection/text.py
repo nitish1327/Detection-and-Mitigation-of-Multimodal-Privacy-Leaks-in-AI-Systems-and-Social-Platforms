@@ -63,6 +63,7 @@ class TextDetector:
                         confidence=0.8,
                         text=ent.text,
                         span=Span(start=ent.start_char, end=ent.end_char),
+                        detection_method="nlp",
                     )
                 )
         return results
@@ -79,6 +80,7 @@ class TextDetector:
                         text=match.group(0),
                         span=Span(start=match.start(), end=match.end()),
                         mitigation=pattern.action,  # pre-select desired action
+                        detection_method="regex",
                     )
                 )
         return results

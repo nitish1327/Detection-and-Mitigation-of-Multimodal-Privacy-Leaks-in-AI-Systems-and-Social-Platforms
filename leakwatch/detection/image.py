@@ -62,6 +62,7 @@ class ImageDetector:
                 confidence=0.9,
                 bbox=BoundingBox(x=int(x), y=int(y), width=int(w), height=int(h)),
                 mitigation="blur",
+                detection_method="heuristic",
             )
 
     def _detect_text(self, image: np.ndarray) -> Iterable[DetectedEntity]:
@@ -98,6 +99,7 @@ class ImageDetector:
                         text=text,
                         bbox=bbox,
                         mitigation="blur",
+                        detection_method="heuristic",
                     )
                 )
         return results

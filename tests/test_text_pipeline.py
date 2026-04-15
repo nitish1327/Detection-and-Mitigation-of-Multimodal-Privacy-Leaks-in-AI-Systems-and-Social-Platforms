@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from leakwatch.orchestration import PipelineManager
@@ -46,3 +47,15 @@ def test_text_pipeline_creates_artifacts(tmp_path):
 
     assert result.audit_log is not None
     assert Path(result.audit_log).exists()
+
+    audit_payload = json.loads(Path(result.audit_log).read_text(encoding="utf-8"))
+    assert "spans" in audit_payload
+    assert isinstance(audit_payload["spans"], list)
+    assert audit_payload["spans"], "expected non-empty spans in audit payload"
+    first_span = audit_payload["spans"][0]
+    assert "span_text" in first_span
+    assert "entity_type" in first_span
+    assert "detection_method" in first_span
+    assert "mitigation_applied" in first_span
+    assert "confidence" in first_span
+    assert "timeline_window" in first_span
