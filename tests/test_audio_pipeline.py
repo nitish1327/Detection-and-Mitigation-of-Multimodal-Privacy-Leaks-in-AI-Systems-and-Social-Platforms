@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 import wave
 from pathlib import Path
@@ -7,6 +8,8 @@ from pathlib import Path
 import pytest
 
 from leakwatch.adapters import AudioAdapter
+from leakwatch.explainability.audit import record_audit
+from leakwatch.mitigation.audio import AudioMitigator
 from leakwatch.orchestration import PipelineManager
 from leakwatch.utils.config import (
     AppConfig,
@@ -17,6 +20,7 @@ from leakwatch.utils.config import (
     RegexEntityConfig,
     TextConfig,
 )
+from leakwatch.utils.types import DetectionResult, DetectedEntity, Modality, Span
 
 
 def _write_sine_wave(path: Path, *, frequency: float = 440.0, seconds: float = 2.0, sample_rate: int = 16000) -> None:
@@ -114,3 +118,132 @@ def test_audio_adapter_transcribes_when_no_companion_transcript(tmp_path: Path) 
 
     text = adapter.to_text(audio_path)
     assert text == "call me at 425-555-1212"
+
+
+def test_audio_window_padding_logic() -> None:
+    transcript = "x" * 100
+    entity = DetectedEntity(
+        modality=Modality.AUDIO,
+        label="PHONE",
+        confidence=0.95,
+        span=Span(start=10, end=20),
+        mitigation="mask",
+        detection_method="regex",
+    )
+    mitigator = AudioMitigator(AudioConfig(enabled=True, padding_ms=150, merge_gap_ms=0, min_beep_ms=0))
+
+    windows = mitigator._ranges_from_entities(transcript, [entity], duration_seconds=10.0)
+
+    assert len(windows) == 1
+    assert windows[0]["start_sec"] == pytest.approx(0.85, abs=1e-6)
+    assert windows[0]["end_sec"] == pytest.approx(2.15, abs=1e-6)
+
+
+def test_audio_window_merge_logic() -> None:
+    transcript = "x" * 100
+    entities = [
+        DetectedEntity(
+            modality=Modality.AUDIO,
+            label="PHONE",
+            confidence=0.95,
+            span=Span(start=10, end=20),
+            mitigation="mask",
+            detection_method="regex",
+        ),
+        DetectedEntity(
+            modality=Modality.AUDIO,
+            label="ID_NUMBER",
+            confidence=0.95,
+            span=Span(start=22, end=30),
+            mitigation="mask",
+            detection_method="regex",
+        ),
+    ]
+    mitigator = AudioMitigator(AudioConfig(enabled=True, padding_ms=0, merge_gap_ms=300, min_beep_ms=0))
+
+    windows = mitigator._ranges_from_entities(transcript, entities, duration_seconds=10.0)
+
+    assert len(windows) == 1
+    assert windows[0]["start_sec"] == pytest.approx(1.0, abs=1e-6)
+    assert windows[0]["end_sec"] == pytest.approx(3.0, abs=1e-6)
+    assert windows[0]["entity_indexes"] == [0, 1]
+
+
+def test_low_confidence_audio_mapping_sets_null_timeline_and_logs_warning(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    entity = DetectedEntity(
+        modality=Modality.AUDIO,
+        label="PHONE",
+        confidence=0.3,
+        text="425-555-1212",
+        span=Span(start=0, end=12),
+        mitigation="mask",
+        detection_method="regex",
+        explanation="425-555-1212",
+    )
+    mitigator = AudioMitigator(
+        AudioConfig(enabled=True, mapping_confidence_threshold=0.8, padding_ms=150, merge_gap_ms=300)
+    )
+
+    caplog.set_level("WARNING")
+    windows = mitigator._ranges_from_entities("425-555-1212", [entity], duration_seconds=2.0)
+    assert windows == []
+    assert "could not be confidently mapped" in caplog.text
+
+    beep_map_path = tmp_path / "beeps.audio.beeps.json"
+    beep_map_path.write_text("[]", encoding="utf-8")
+    result = DetectionResult(
+        source_path=tmp_path / "call.wav",
+        modality=Modality.AUDIO,
+        entities=[entity],
+        artifacts=[beep_map_path],
+    )
+    audit_path = record_audit(result, ExplainabilityConfig(audit_log_path=tmp_path / "audit.log"))
+    payload = audit_path.read_text(encoding="utf-8")
+    assert '"timeline_window": null' in payload
+
+
+def test_audio_timeline_maps_correctly_with_non_insertion_entity_order(tmp_path: Path) -> None:
+    # Beep map windows are keyed by entity_ids from detection order.
+    beep_map = [
+        {"label": "PHONE", "start_sec": 1.0, "end_sec": 1.5, "entity_ids": ["e1"]},
+        {"label": "EMAIL", "start_sec": 2.0, "end_sec": 2.6, "entity_ids": ["e2"]},
+    ]
+    beep_map_path = tmp_path / "call.audio.beeps.json"
+    beep_map_path.write_text(json.dumps(beep_map), encoding="utf-8")
+
+    # Deliberately reverse entity order to simulate sorting/reordering between stages.
+    entities = [
+        DetectedEntity(
+            entity_id="e2",
+            modality=Modality.AUDIO,
+            label="EMAIL",
+            confidence=0.95,
+            text="person@example.com",
+            mitigation="mask",
+            detection_method="regex",
+        ),
+        DetectedEntity(
+            entity_id="e1",
+            modality=Modality.AUDIO,
+            label="PHONE",
+            confidence=0.95,
+            text="425-555-1212",
+            mitigation="mask",
+            detection_method="regex",
+        ),
+    ]
+    result = DetectionResult(
+        source_path=tmp_path / "call.wav",
+        modality=Modality.AUDIO,
+        entities=entities,
+        artifacts=[beep_map_path],
+    )
+
+    audit_path = record_audit(result, ExplainabilityConfig(audit_log_path=tmp_path / "audit.log"))
+    payload = json.loads(audit_path.read_text(encoding="utf-8"))
+    spans = payload["spans"]
+
+    assert spans[0]["entity_type"] == "EMAIL"
+    assert spans[0]["timeline_window"] == [2000, 2600]
+    assert spans[1]["entity_type"] == "PHONE"
+    assert spans[1]["timeline_window"] == [1000, 1500]

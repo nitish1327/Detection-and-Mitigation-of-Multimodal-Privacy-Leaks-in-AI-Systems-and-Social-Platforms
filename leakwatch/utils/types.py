@@ -29,6 +29,7 @@ class BoundingBox(BaseModel):
 
 
 class DetectedEntity(BaseModel):
+    entity_id: str | None = None
     modality: Modality
     label: str
     confidence: float

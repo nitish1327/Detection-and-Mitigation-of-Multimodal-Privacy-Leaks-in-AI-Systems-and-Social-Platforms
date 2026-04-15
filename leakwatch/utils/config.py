@@ -62,7 +62,9 @@ class AudioConfig(ModalityToggle):
     beep_frequency_hz: float = 1000.0
     beep_amplitude: float = 0.85
     min_beep_ms: int = 120
-    padding_ms: int = 80
+    padding_ms: int = 150
+    merge_gap_ms: int = 300
+    mapping_confidence_threshold: float = 0.5
 
 
 class AppConfig(BaseModel):

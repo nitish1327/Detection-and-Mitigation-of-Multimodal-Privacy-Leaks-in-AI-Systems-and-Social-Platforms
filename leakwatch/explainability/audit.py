@@ -89,7 +89,35 @@ def _audio_windows_for_entities(result: DetectionResult) -> list[list[int] | Non
 
     beep_map = _read_beep_map(result)
     if not beep_map:
-        return []
+        return [None for _ in result.entities]
+
+    by_entity_id: dict[str, list[int]] = {}
+    for window in beep_map:
+        entity_ids = window.get("entity_ids")
+        if not isinstance(entity_ids, list):
+            continue
+        start_ms = int(float(window.get("start_sec", 0.0)) * 1000)
+        end_ms = int(float(window.get("end_sec", 0.0)) * 1000)
+        for raw_id in entity_ids:
+            if isinstance(raw_id, str) and raw_id:
+                by_entity_id[raw_id] = [start_ms, end_ms]
+
+    if by_entity_id:
+        return [by_entity_id.get(entity.entity_id or "") for entity in result.entities]
+
+    by_index: dict[int, list[int]] = {}
+    for window in beep_map:
+        entity_indexes = window.get("entity_indexes")
+        if not isinstance(entity_indexes, list):
+            continue
+        start_ms = int(float(window.get("start_sec", 0.0)) * 1000)
+        end_ms = int(float(window.get("end_sec", 0.0)) * 1000)
+        for raw_index in entity_indexes:
+            if isinstance(raw_index, int):
+                by_index[raw_index] = [start_ms, end_ms]
+
+    if by_index:
+        return [by_index.get(index) for index, _ in enumerate(result.entities)]
 
     windows: list[list[int] | None] = []
     for entity in result.entities:

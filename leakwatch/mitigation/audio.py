@@ -10,9 +10,14 @@ import wave
 from array import array
 from contextlib import suppress
 from pathlib import Path
+from typing import Any
 
 from ..utils.config import AudioConfig
+from ..utils.logging import get_logger
 from ..utils.types import DetectedEntity
+
+
+LOGGER = get_logger(__name__)
 
 
 class AudioMitigator:
@@ -128,17 +133,27 @@ class AudioMitigator:
         transcript: str,
         entities: list[DetectedEntity],
         duration_seconds: float,
-    ) -> list[dict[str, float]]:
+    ) -> list[dict[str, Any]]:
         if not transcript or not entities or duration_seconds <= 0:
             return []
 
-        windows: list[dict[str, float]] = []
+        windows: list[dict[str, Any]] = []
         transcript_len = max(1, len(transcript))
         padding = max(0.0, self.config.padding_ms / 1000.0)
         min_beep = max(0.0, self.config.min_beep_ms / 1000.0)
+        merge_gap = max(0.0, self.config.merge_gap_ms / 1000.0)
+        mapping_threshold = float(self.config.mapping_confidence_threshold)
 
-        for entity in entities:
+        for index, entity in enumerate(entities):
             if not entity.span:
+                continue
+            if entity.confidence < mapping_threshold:
+                LOGGER.warning(
+                    "Sensitive span could not be confidently mapped: label=%s confidence=%.3f threshold=%.3f",
+                    entity.label,
+                    entity.confidence,
+                    mapping_threshold,
+                )
                 continue
             start_char = max(0, min(entity.span.start, transcript_len))
             end_char = max(start_char, min(entity.span.end, transcript_len))
@@ -152,6 +167,8 @@ class AudioMitigator:
                     "label": entity.label,
                     "start_sec": max(0.0, start_sec - padding),
                     "end_sec": min(duration_seconds, end_sec + padding),
+                    "entity_indexes": [index],
+                    "entity_ids": [entity.entity_id] if entity.entity_id else [],
                 }
             )
 
@@ -159,14 +176,18 @@ class AudioMitigator:
             return []
 
         windows.sort(key=lambda item: item["start_sec"])
-        merged: list[dict[str, float]] = [windows[0].copy()]
+        merged: list[dict[str, Any]] = [windows[0].copy()]
 
         for current in windows[1:]:
             previous = merged[-1]
-            if current["start_sec"] <= previous["end_sec"]:
+            if current["start_sec"] <= previous["end_sec"] + merge_gap:
                 previous["end_sec"] = max(previous["end_sec"], current["end_sec"])
                 if current["label"] != previous["label"]:
                     previous["label"] = f"{previous['label']}|{current['label']}"
+                previous["entity_indexes"].extend(current.get("entity_indexes", []))
+                previous["entity_indexes"] = sorted(set(previous["entity_indexes"]))
+                previous["entity_ids"].extend(current.get("entity_ids", []))
+                previous["entity_ids"] = sorted(set(previous["entity_ids"]))
             else:
                 merged.append(current.copy())
 

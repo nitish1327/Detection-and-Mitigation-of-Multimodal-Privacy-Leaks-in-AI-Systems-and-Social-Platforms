@@ -59,7 +59,7 @@ class PipelineManager:
         LOGGER.info("Processing audio: %s", source_path.name)
         transcript = self.audio_adapter.to_text(source_path)
 
-        detected_entities = self.text_detector.detect(transcript)
+        detected_entities = self._stamp_entity_ids(self.text_detector.detect(transcript))
         sanitized_text, mitigated_entities = self.text_mitigator.mitigate(transcript, detected_entities)
 
         transcript_path = self._output_path(source_path, suffix=".transcript.txt")
@@ -98,6 +98,15 @@ class PipelineManager:
         )
         self._attach_audit(result)
         return result
+
+    def _stamp_entity_ids(self, entities: list[DetectedEntity]) -> list[DetectedEntity]:
+        stamped: list[DetectedEntity] = []
+        for index, entity in enumerate(entities):
+            start = entity.span.start if entity.span else -1
+            end = entity.span.end if entity.span else -1
+            token = f"{index}:{entity.label}:{start}:{end}:{entity.text or ''}"
+            stamped.append(entity.model_copy(update={"entity_id": token}))
+        return stamped
 
     # --- Image Modality -----------------------------------------------
     def process_image(self, path: Path, output_path: Path | None = None) -> DetectionResult:
