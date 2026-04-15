@@ -17,6 +17,7 @@ from ..utils.types import DetectionResult
 
 def record_audit(result: DetectionResult, config: ExplainabilityConfig) -> Path:
     spans = _build_spans(result, config)
+    ffmpeg_fallback = _audio_ffmpeg_fallback(result)
     entry = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "modality": result.modality.value,
@@ -24,6 +25,7 @@ def record_audit(result: DetectionResult, config: ExplainabilityConfig) -> Path:
         "output": str(result.mitigated_output) if result.mitigated_output else None,
         "artifacts": [str(path) for path in result.artifacts],
         "entity_count": len(result.entities),
+        "ffmpeg_fallback": ffmpeg_fallback,
         "spans": spans,
         "entities": [
             {
@@ -140,6 +142,16 @@ def _read_beep_map(result: DetectionResult) -> list[dict[str, Any]]:
             if isinstance(payload, list):
                 return [item for item in payload if isinstance(item, dict)]
     return []
+
+
+def _audio_ffmpeg_fallback(result: DetectionResult) -> bool:
+    runtime_flag = result.runtime_metadata.get("ffmpeg_fallback")
+    if isinstance(runtime_flag, bool):
+        return runtime_flag
+    for window in _read_beep_map(result):
+        if window.get("ffmpeg_fallback") is True:
+            return True
+    return False
 
 
 def _pop_matching_audio_window(label: str, windows: list[dict[str, Any]]) -> dict[str, Any] | None:

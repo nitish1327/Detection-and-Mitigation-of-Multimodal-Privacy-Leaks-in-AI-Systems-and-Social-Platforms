@@ -20,11 +20,35 @@ from ..utils.types import DetectedEntity
 LOGGER = get_logger(__name__)
 
 
+def _resolve_bundled_ffmpeg() -> str | None:
+    try:
+        from imageio_ffmpeg import get_ffmpeg_exe
+    except ImportError:
+        return None
+    ffmpeg_exe = get_ffmpeg_exe()
+    return ffmpeg_exe if ffmpeg_exe and Path(ffmpeg_exe).exists() else None
+
+
+def _startup_validate_ffmpeg() -> None:
+    system_ffmpeg = shutil.which("ffmpeg")
+    fallback_ffmpeg = _resolve_bundled_ffmpeg()
+    if system_ffmpeg or fallback_ffmpeg:
+        return
+    raise RuntimeError(
+        "LeakWatch audio mitigation requires ffmpeg. Install ffmpeg in PATH or install imageio-ffmpeg "
+        "(pip install imageio-ffmpeg) so bundled fallback can be used."
+    )
+
+
+_startup_validate_ffmpeg()
+
+
 class AudioMitigator:
     """Mitigate sensitive audio spans by overlaying a tone in WAV waveforms."""
 
     def __init__(self, config: AudioConfig) -> None:
         self.config = config
+        self.last_ffmpeg_fallback = False
 
     def mitigate(
         self,
@@ -34,7 +58,8 @@ class AudioMitigator:
         output_path: Path,
     ) -> tuple[Path, list[dict[str, float]]]:
         source_path = Path(audio_path)
-        normalized_path, cleanup_path = self._normalize_for_beeping(source_path)
+        normalized_path, cleanup_path, fallback_used = self._normalize_for_beeping(source_path)
+        self.last_ffmpeg_fallback = fallback_used
         with wave.open(str(normalized_path), "rb") as in_wav:
             channels = in_wav.getnchannels()
             sample_width = in_wav.getsampwidth()
@@ -53,6 +78,7 @@ class AudioMitigator:
 
         # Convert entity-aligned time windows into sample indices and paint a tone.
         for window in time_ranges:
+            window["ffmpeg_fallback"] = fallback_used
             start_index = max(0, int(window["start_sec"] * frame_rate))
             end_index = min(frame_count, int(window["end_sec"] * frame_rate))
             for frame_idx in range(start_index, end_index):
@@ -77,56 +103,60 @@ class AudioMitigator:
 
         return output_path, time_ranges
 
-    def _normalize_for_beeping(self, source_path: Path) -> tuple[Path, Path | None]:
+    def _normalize_for_beeping(self, source_path: Path) -> tuple[Path, Path | None, bool]:
         if source_path.suffix.lower() == ".wav":
             try:
                 with wave.open(str(source_path), "rb") as wav_file:
                     if wav_file.getsampwidth() == 2:
-                        return source_path, None
+                        return source_path, None, False
             except wave.Error:
                 pass
 
-        ffmpeg_binary = shutil.which(self.config.ffmpeg_binary)
-        if not ffmpeg_binary:
-            ffmpeg_binary = self._bundled_ffmpeg()
-        if not ffmpeg_binary:
+        system_ffmpeg = shutil.which(self.config.ffmpeg_binary)
+        fallback_ffmpeg = self._bundled_ffmpeg()
+        candidates: list[tuple[str, bool]] = []
+        if system_ffmpeg:
+            candidates.append((system_ffmpeg, False))
+        if fallback_ffmpeg and fallback_ffmpeg != system_ffmpeg:
+            candidates.append((fallback_ffmpeg, True))
+        if not candidates:
             raise RuntimeError("ffmpeg is required to process non-WAV audio input.")
 
         tmp_file = tempfile.NamedTemporaryFile(prefix="leakwatch_audio_", suffix=".wav", delete=False)
         tmp_file_path = Path(tmp_file.name)
         tmp_file.close()
 
-        command = [
-            ffmpeg_binary,
-            "-y",
-            "-i",
-            str(source_path),
-            "-ac",
-            "1",
-            "-ar",
-            "16000",
-            "-acodec",
-            "pcm_s16le",
-            str(tmp_file_path),
-        ]
+        failures: list[str] = []
+        for ffmpeg_binary, is_fallback in candidates:
+            command = [
+                ffmpeg_binary,
+                "-y",
+                "-i",
+                str(source_path),
+                "-ac",
+                "1",
+                "-ar",
+                "16000",
+                "-acodec",
+                "pcm_s16le",
+                str(tmp_file_path),
+            ]
+            try:
+                result = subprocess.run(command, capture_output=True, text=True)
+            except FileNotFoundError as exc:
+                failures.append(f"{ffmpeg_binary}: {exc}")
+                continue
+            if result.returncode == 0:
+                return tmp_file_path, tmp_file_path, is_fallback
+            failures.append(f"{ffmpeg_binary}: {result.stderr.strip()}")
 
-        result = subprocess.run(command, capture_output=True, text=True)
-        if result.returncode != 0:
-            with suppress(FileNotFoundError):
-                tmp_file_path.unlink()
-            raise RuntimeError(
-                f"Failed to normalize audio using ffmpeg for {source_path.name}: {result.stderr.strip()}"
-            )
-
-        return tmp_file_path, tmp_file_path
+        with suppress(FileNotFoundError):
+            tmp_file_path.unlink()
+        joined = " | ".join(failures)
+        raise RuntimeError(f"Failed to normalize audio using ffmpeg for {source_path.name}: {joined}")
 
     def _bundled_ffmpeg(self) -> str | None:
-        try:
-            from imageio_ffmpeg import get_ffmpeg_exe
-        except ImportError:
-            return None
-        ffmpeg_exe = get_ffmpeg_exe()
-        return ffmpeg_exe if ffmpeg_exe and Path(ffmpeg_exe).exists() else None
+        return _resolve_bundled_ffmpeg()
 
     def _ranges_from_entities(
         self,

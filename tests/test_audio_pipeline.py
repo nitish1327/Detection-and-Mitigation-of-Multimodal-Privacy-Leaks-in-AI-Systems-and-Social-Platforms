@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import math
+import subprocess
 import wave
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -34,6 +36,16 @@ def _write_sine_wave(path: Path, *, frequency: float = 440.0, seconds: float = 2
     with wave.open(str(path), "wb") as wav:
         wav.setnchannels(1)
         wav.setsampwidth(2)
+        wav.setframerate(sample_rate)
+        wav.writeframes(frames)
+
+
+def _write_u8_wave(path: Path, *, seconds: float = 1.0, sample_rate: int = 8000) -> None:
+    total_frames = int(seconds * sample_rate)
+    frames = bytes([128] * total_frames)
+    with wave.open(str(path), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(1)
         wav.setframerate(sample_rate)
         wav.writeframes(frames)
 
@@ -247,3 +259,69 @@ def test_audio_timeline_maps_correctly_with_non_insertion_entity_order(tmp_path:
     assert spans[0]["timeline_window"] == [2000, 2600]
     assert spans[1]["entity_type"] == "PHONE"
     assert spans[1]["timeline_window"] == [1000, 1500]
+
+
+@pytest.mark.parametrize(
+    ("system_ffmpeg", "system_raises"),
+    [
+        ("system_ffmpeg", True),  # binary discovered, but invocation fails
+        (None, False),             # binary absent from PATH
+    ],
+)
+def test_ffmpeg_fallback_is_used_when_system_binary_fails(
+    tmp_path: Path,
+    system_ffmpeg: str | None,
+    system_raises: bool,
+) -> None:
+    audio_path = tmp_path / "call.wav"
+    transcript_path = tmp_path / "call.txt"
+    _write_u8_wave(audio_path)
+    transcript_path.write_text("Call me at 425-555-1212", encoding="utf-8")
+
+    config = LeakWatchConfig(
+        app=AppConfig(output_dir=tmp_path / "artifacts"),
+        text=TextConfig(
+            enable_spacy=False,
+            regex_entities=[RegexEntityConfig(name="phone", pattern=r"\b\d{3}-\d{3}-\d{4}\b", action="mask")],
+        ),
+        image=ImageConfig(enable_ocr=False),
+        explainability=ExplainabilityConfig(
+            save_text_spans=True,
+            save_image_overlays=False,
+            audit_log_path=tmp_path / "audit.log",
+        ),
+        audio=AudioConfig(enabled=True, enable_transcription=False),
+    )
+    manager = PipelineManager(config)
+
+    commands: list[str] = []
+
+    def _fake_run(cmd: list[str], capture_output: bool, text: bool):
+        commands.append(cmd[0])
+        if system_raises and cmd[0] == "system_ffmpeg":
+            raise FileNotFoundError("system ffmpeg not found")
+
+        # Simulate fallback ffmpeg output conversion into 16-bit PCM wav.
+        output = Path(cmd[-1])
+        _write_sine_wave(output, seconds=1.0)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    with (
+        patch("leakwatch.mitigation.audio.shutil.which", return_value=system_ffmpeg),
+        patch.object(manager.audio_mitigator, "_bundled_ffmpeg", return_value="fallback_ffmpeg"),
+        patch("leakwatch.mitigation.audio.subprocess.run", side_effect=_fake_run),
+    ):
+        result = manager.process_audio(audio_path)
+
+    if system_ffmpeg:
+        assert commands[0] == "system_ffmpeg"
+    else:
+        assert commands[0] == "fallback_ffmpeg"
+    assert "fallback_ffmpeg" in commands
+    assert result.mitigated_output is not None
+    assert result.mitigated_output.exists()
+    assert result.runtime_metadata.get("ffmpeg_fallback") is True
+
+    assert result.audit_log is not None
+    payload = json.loads(result.audit_log.read_text(encoding="utf-8"))
+    assert payload["ffmpeg_fallback"] is True

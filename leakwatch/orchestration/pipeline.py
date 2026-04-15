@@ -95,6 +95,7 @@ class PipelineManager:
             entities=mitigated_entities,
             mitigated_output=beeped_audio_path,
             artifacts=artifacts,
+            runtime_metadata={"ffmpeg_fallback": self.audio_mitigator.last_ffmpeg_fallback},
         )
         self._attach_audit(result)
         return result

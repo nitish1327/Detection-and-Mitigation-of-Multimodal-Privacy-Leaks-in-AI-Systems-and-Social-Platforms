@@ -48,6 +48,7 @@ class DetectionResult(BaseModel):
     mitigated_output: Path | None = None
     audit_log: Path | None = None
     artifacts: list[Path] = Field(default_factory=list)
+    runtime_metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class GraphNode(BaseModel):
