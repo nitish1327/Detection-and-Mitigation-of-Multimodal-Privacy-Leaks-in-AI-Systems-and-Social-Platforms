@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import subprocess
+import shutil
 from pathlib import Path
 from typing import Any, Callable, List
 
@@ -198,10 +200,11 @@ class VideoAdapter:
 				fps = float(detected_fps)
 		capture.release()
 
+		temp_output_path = output_video_path.with_name(f"{output_video_path.stem}.tmp.mp4")
 		fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-		writer = cv2.VideoWriter(str(output_video_path), fourcc, fps, (width, height))
+		writer = cv2.VideoWriter(str(temp_output_path), fourcc, fps, (width, height))
 		if not writer.isOpened():
-			raise RuntimeError(f"Unable to open video writer for: {output_video_path}")
+			raise RuntimeError(f"Unable to open video writer for: {temp_output_path}")
 
 		for frame_path in processed_frames:
 			frame = cv2.imread(str(frame_path))
@@ -212,7 +215,54 @@ class VideoAdapter:
 			writer.write(frame)
 
 		writer.release()
+		self._transcode_h264(temp_output_path, output_video_path)
 		return output_video_path
+
+	def _transcode_h264(self, input_path: Path, output_path: Path) -> None:
+		ffmpeg_binary = self._ffmpeg_executable()
+		if not ffmpeg_binary:
+			LOGGER.warning("ffmpeg not available; using fallback MP4 encoding for %s", output_path.name)
+			input_path.replace(output_path)
+			return
+
+		command = [
+			ffmpeg_binary,
+			"-y",
+			"-i",
+			str(input_path),
+			"-c:v",
+			"libx264",
+			"-pix_fmt",
+			"yuv420p",
+			"-movflags",
+			"+faststart",
+			"-an",
+			str(output_path),
+		]
+		result = subprocess.run(command, capture_output=True, text=True)
+		if result.returncode != 0:
+			LOGGER.warning(
+				"H.264 transcode failed for %s (%s); using fallback MP4 encoding.",
+				output_path.name,
+				result.stderr.strip(),
+			)
+			input_path.replace(output_path)
+			return
+		if input_path.exists():
+			input_path.unlink()
+
+	def _ffmpeg_executable(self) -> str | None:
+		system_ffmpeg = shutil.which("ffmpeg")
+		if system_ffmpeg:
+			return system_ffmpeg
+		try:
+			from imageio_ffmpeg import get_ffmpeg_exe
+		except ImportError:
+			return None
+		fallback = get_ffmpeg_exe()
+		if fallback and Path(fallback).exists():
+			return fallback
+		return None
 
 
 # GAN/GraphSAGE powered adapters may be slotted in later; Phase 2 intentionally stays deterministic.
