@@ -144,33 +144,53 @@ class PipelineManager:
         LOGGER.info("Processing video: %s", source_path.name)
         frame_dir = Path(self.config.app.output_dir) / f"{source_path.stem}_frames"
         frame_dir.mkdir(parents=True, exist_ok=True)
-        frame_paths = self.video_adapter.extract_frames(source_path, frame_dir)
-        aggregated_entities: list[DetectedEntity] = []
-        artifacts: list[Path] = []
-        sanitized_manifest_entries: list[str] = []
 
-        for frame_path in frame_paths:
-            frame_result = self.process_image(frame_path)
-            aggregated_entities.extend(frame_result.entities)
-            artifacts.extend(frame_result.artifacts)
-            artifacts.append(frame_path)
-            if frame_result.mitigated_output:
-                artifacts.append(frame_result.mitigated_output)
-                sanitized_manifest_entries.append(str(frame_result.mitigated_output))
+        try:
+            frame_paths = self.video_adapter.extract_frames(source_path, frame_dir)
+            aggregated_entities: list[DetectedEntity] = []
+            artifacts: list[Path] = []
+            processed_frames: list[Path] = []
 
-        manifest_path = self._output_path(source_path, suffix=".video.manifest.txt")
-        ensure_dir(manifest_path)
-        manifest_path.write_text("\n".join(sanitized_manifest_entries), encoding="utf-8")
-        result = DetectionResult(
-            source_path=source_path,
-            modality=Modality.VIDEO,
-            entities=aggregated_entities,
-            mitigated_output=manifest_path,
-            artifacts=artifacts,
-            runtime_metadata={"detection_mode": self.text_detector.detection_mode},
-        )
-        self._attach_audit(result)
-        return result
+            for frame_path in frame_paths:
+                frame_result = self.process_image(frame_path)
+                aggregated_entities.extend(frame_result.entities)
+                artifacts.extend(frame_result.artifacts)
+                artifacts.append(frame_path)
+                if frame_result.mitigated_output:
+                    artifacts.append(frame_result.mitigated_output)
+                    processed_frames.append(frame_result.mitigated_output)
+
+            output_video_path = self._output_path(source_path, suffix=".sanitized.mp4")
+            ensure_dir(output_video_path)
+            reconstructed_video = self.video_adapter.reconstruct_video(source_path, processed_frames, output_video_path)
+            artifacts.append(reconstructed_video)
+
+            result = DetectionResult(
+                source_path=source_path,
+                modality=Modality.VIDEO,
+                entities=aggregated_entities,
+                mitigated_output=reconstructed_video,
+                artifacts=artifacts,
+                runtime_metadata={"detection_mode": self.text_detector.detection_mode},
+            )
+            self._attach_audit(result)
+            return result
+
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("Video processing failed for %s: %s", source_path, exc)
+            result = DetectionResult(
+                source_path=source_path,
+                modality=Modality.VIDEO,
+                entities=[],
+                mitigated_output=None,
+                artifacts=[],
+                runtime_metadata={
+                    "detection_mode": self.text_detector.detection_mode,
+                    "failure_reason": str(exc),
+                },
+            )
+            self._attach_audit(result)
+            return result
 
     # --- Helpers -------------------------------------------------------
     def _output_path(self, source_path: Path, suffix: str) -> Path:

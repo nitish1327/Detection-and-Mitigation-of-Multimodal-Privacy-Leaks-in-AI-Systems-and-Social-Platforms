@@ -109,5 +109,43 @@ class VideoAdapter:
 			LOGGER.warning("Video contained no readable frames: %s", video_path)
 		return extracted
 
+	def reconstruct_video(
+		self,
+		source_video_path: Path,
+		processed_frames: List[Path],
+		output_video_path: Path,
+	) -> Path:
+		if not processed_frames:
+			raise RuntimeError("No processed frames available to reconstruct video")
+
+		first_frame = cv2.imread(str(processed_frames[0]))
+		if first_frame is None:
+			raise RuntimeError(f"Unable to read processed frame: {processed_frames[0]}")
+
+		height, width = first_frame.shape[:2]
+		fps = 10.0
+		capture = cv2.VideoCapture(str(source_video_path))
+		if capture.isOpened():
+			detected_fps = capture.get(cv2.CAP_PROP_FPS)
+			if detected_fps and detected_fps > 0:
+				fps = float(detected_fps)
+		capture.release()
+
+		fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+		writer = cv2.VideoWriter(str(output_video_path), fourcc, fps, (width, height))
+		if not writer.isOpened():
+			raise RuntimeError(f"Unable to open video writer for: {output_video_path}")
+
+		for frame_path in processed_frames:
+			frame = cv2.imread(str(frame_path))
+			if frame is None:
+				continue
+			if frame.shape[0] != height or frame.shape[1] != width:
+				frame = cv2.resize(frame, (width, height))
+			writer.write(frame)
+
+		writer.release()
+		return output_video_path
+
 
 # GAN/GraphSAGE powered adapters may be slotted in later; Phase 2 intentionally stays deterministic.
