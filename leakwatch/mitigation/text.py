@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import List, Tuple
+from typing import Dict, List, Tuple, Callable
+import faker
 
 from ..utils.config import TextConfig
 from ..utils.types import DetectedEntity, Span
@@ -13,6 +14,16 @@ class TextMitigator:
 
     def __init__(self, config: TextConfig) -> None:
         self.config = config
+        self.fake = faker.Faker()
+        self._faker_map: Dict[str, Callable] = {
+            "PERSON": self.fake.name,
+            "ORG": self.fake.company,
+            "GPE": self.fake.city,
+            "DATE": lambda: self.fake.date_between(start_date="-1y", end_date="today").strftime("%B %d, %Y"),
+            "ADDRESS": self.fake.address,
+            "PHONE": self.fake.phone_number,
+            "EMAIL": self.fake.email,
+        }
 
     def mitigate(self, text: str, entities: list[DetectedEntity]) -> Tuple[str, List[DetectedEntity]]:
         if not text or not entities:
@@ -57,4 +68,8 @@ class TextMitigator:
             return "*" * (len(entity.text or "REDACTED"))
         if style == "synthetic":
             return f"<{label}>"
+        if style == "faker":
+            if label in self._faker_map:
+                return self._faker_map[label]()
+            return f"[FAKE:{label}]"
         return f"[REDACTED:{label}]"

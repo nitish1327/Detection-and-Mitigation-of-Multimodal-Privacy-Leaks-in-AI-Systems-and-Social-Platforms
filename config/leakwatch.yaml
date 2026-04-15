@@ -5,7 +5,7 @@ app:
 text:
   enable_spacy: true
   max_doc_length: 10000
-  mask_style: "brackets"  # options: brackets, asterisks, synthetic
+  mask_style: "faker"  # options: brackets, asterisks, synthetic, faker
   confidence_threshold: 0.45
   regex_entities:
     - name: "email"
