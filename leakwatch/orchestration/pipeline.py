@@ -95,7 +95,10 @@ class PipelineManager:
             entities=mitigated_entities,
             mitigated_output=beeped_audio_path,
             artifacts=artifacts,
-            runtime_metadata={"ffmpeg_fallback": self.audio_mitigator.last_ffmpeg_fallback},
+            runtime_metadata={
+                "ffmpeg_fallback": self.audio_mitigator.last_ffmpeg_fallback,
+                "detection_mode": self.text_detector.detection_mode,
+            },
         )
         self._attach_audit(result)
         return result
@@ -128,6 +131,7 @@ class PipelineManager:
             entities=mitigated_entities,
             mitigated_output=mitigated_path,
             artifacts=artifacts,
+            runtime_metadata={"detection_mode": self.text_detector.detection_mode},
         )
         self._attach_audit(result)
         return result
@@ -163,6 +167,7 @@ class PipelineManager:
             entities=aggregated_entities,
             mitigated_output=manifest_path,
             artifacts=artifacts,
+            runtime_metadata={"detection_mode": self.text_detector.detection_mode},
         )
         self._attach_audit(result)
         return result
@@ -223,6 +228,7 @@ class PipelineManager:
             entities=mitigated_entities,
             mitigated_output=output_path,
             artifacts=artifacts,
+            runtime_metadata={"detection_mode": self.text_detector.detection_mode},
         )
         self._attach_audit(result)
         return result

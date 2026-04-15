@@ -18,9 +18,11 @@ from ..utils.types import DetectionResult
 def record_audit(result: DetectionResult, config: ExplainabilityConfig) -> Path:
     spans = _build_spans(result, config)
     ffmpeg_fallback = _audio_ffmpeg_fallback(result)
+    detection_mode = str(result.runtime_metadata.get("detection_mode", "regex"))
     entry = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "modality": result.modality.value,
+        "detection_mode": detection_mode,
         "source": str(result.source_path),
         "output": str(result.mitigated_output) if result.mitigated_output else None,
         "artifacts": [str(path) for path in result.artifacts],

@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
+from unittest.mock import patch
 
+import leakwatch.detection.text as text_detection_module
 from leakwatch.orchestration import PipelineManager
 from leakwatch.utils.config import (
     AppConfig,
@@ -59,3 +61,39 @@ def test_text_pipeline_creates_artifacts(tmp_path):
     assert "mitigation_applied" in first_span
     assert "confidence" in first_span
     assert "timeline_window" in first_span
+
+
+def test_nlp_importerror_emits_warning_and_uses_regex_fallback_mode(tmp_path, caplog):
+    input_text = "Call me at 123-456-7890"
+    sample = tmp_path / "input.txt"
+    sample.write_text(input_text, encoding="utf-8")
+
+    config = LeakWatchConfig(
+        app=AppConfig(output_dir=tmp_path / "artifacts"),
+        text=TextConfig(
+            enable_spacy=True,
+            regex_entities=[
+                RegexEntityConfig(name="phone", pattern=r"\d{3}-\d{3}-\d{4}", action="mask"),
+            ],
+        ),
+        image=ImageConfig(enable_ocr=False),
+        explainability=ExplainabilityConfig(
+            save_text_spans=True,
+            save_image_overlays=False,
+            audit_log_path=tmp_path / "audit.log",
+        ),
+    )
+
+    caplog.set_level("WARNING")
+    with patch.object(text_detection_module, "spacy") as mock_spacy:
+        mock_spacy.load.side_effect = ImportError("mocked import failure")
+        manager = PipelineManager(config)
+        result = manager.process_text(sample)
+
+    assert result.mitigated_output is not None
+    assert result.mitigated_output.exists()
+    assert "falling back to regex-only" in caplog.text
+
+    assert result.audit_log is not None
+    payload = json.loads(Path(result.audit_log).read_text(encoding="utf-8"))
+    assert payload["detection_mode"] == "regex_fallback"
