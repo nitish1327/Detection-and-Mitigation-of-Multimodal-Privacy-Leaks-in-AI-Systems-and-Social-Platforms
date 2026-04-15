@@ -21,16 +21,22 @@ class AudioAdapter:
 		enable_transcription: bool = True,
 		transcription_backend: str = "whisper",
 		whisper_model: str = "base",
+		app_mode: str = "cli",
 		transcriber: Callable[[Path], str] | None = None,
 	) -> None:
 		self.transcript_extension = transcript_extension
 		self.enable_transcription = enable_transcription
 		self.transcription_backend = transcription_backend
 		self.whisper_model = whisper_model
+		self.app_mode = app_mode
 		self._transcriber = transcriber
 		self._whisper_model_obj: Any | None = None
+		self.last_multi_speaker_detected = False
+		self.last_redaction_confidence = "normal"
 
 	def to_text(self, audio_path: Path) -> str:
+		self.last_multi_speaker_detected = False
+		self.last_redaction_confidence = "normal"
 		path = Path(audio_path)
 		if path.suffix.lower() == self.transcript_extension:
 			return path.read_text(encoding="utf-8")
@@ -50,7 +56,11 @@ class AudioAdapter:
 
 	def _transcribe(self, audio_path: Path) -> str:
 		if self._transcriber is not None:
-			return self._transcriber(audio_path)
+			result = self._transcriber(audio_path)
+			if isinstance(result, dict):
+				self._update_speaker_flags(result)
+				return str(result.get("text", "")).strip()
+			return str(result).strip()
 
 		backend = self.transcription_backend.lower().strip()
 		if backend != "whisper":
@@ -67,11 +77,68 @@ class AudioAdapter:
 		if self._whisper_model_obj is None:
 			self._whisper_model_obj = whisper.load_model(self.whisper_model)
 
-		transcript = self._whisper_model_obj.transcribe(str(audio_path), fp16=False)
+		transcript = self._whisper_model_obj.transcribe(str(audio_path), fp16=False, word_timestamps=True)
+		self._update_speaker_flags(transcript)
 		text = str(transcript.get("text", "")).strip()
 		if not text:
 			raise RuntimeError(f"Transcription produced empty text for {audio_path.name}")
 		return text
+
+	def _update_speaker_flags(self, transcript: dict[str, Any]) -> None:
+		if not transcript:
+			return
+		segments = transcript.get("segments") or []
+		if not isinstance(segments, list) or not segments:
+			return
+
+		words: list[tuple[float, float]] = []
+		high_no_speech = 0
+		for segment in segments:
+			if not isinstance(segment, dict):
+				continue
+			no_speech_prob = float(segment.get("no_speech_prob", 0.0) or 0.0)
+			if no_speech_prob >= 0.6:
+				high_no_speech += 1
+			for word in segment.get("words", []) or []:
+				if not isinstance(word, dict):
+					continue
+				start = word.get("start")
+				end = word.get("end")
+				if start is None or end is None:
+					continue
+				try:
+					words.append((float(start), float(end)))
+				except (TypeError, ValueError):
+					continue
+
+		rapid_gap_count = 0
+		overlap_count = 0
+		pair_count = 0
+		for idx in range(1, len(words)):
+			gap = words[idx][0] - words[idx - 1][1]
+			pair_count += 1
+			if gap < 0:
+				overlap_count += 1
+			if gap < 0.05:
+				rapid_gap_count += 1
+
+		rapid_ratio = (rapid_gap_count / pair_count) if pair_count else 0.0
+		multi_speaker_likely = (
+			overlap_count > 0
+			or rapid_ratio > 0.2
+			or high_no_speech >= 2
+		)
+
+		if multi_speaker_likely:
+			self.last_multi_speaker_detected = True
+			self.last_redaction_confidence = "reduced"
+			message = (
+				"[LeakWatch] Multi-speaker overlap likely detected in audio transcript; "
+				"redaction precision may be lower for tightly overlapping speech."
+			)
+			LOGGER.warning(message)
+			if self.app_mode == "cli":
+				print(message)
 
 
 class VideoAdapter:

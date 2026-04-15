@@ -20,6 +20,8 @@ def record_audit(result: DetectionResult, config: ExplainabilityConfig) -> Path:
     ffmpeg_fallback = _audio_ffmpeg_fallback(result)
     detection_mode = str(result.runtime_metadata.get("detection_mode", "regex"))
     failure_reason = result.runtime_metadata.get("failure_reason")
+    multi_speaker_detected = bool(result.runtime_metadata.get("multi_speaker_detected", False))
+    redaction_confidence = str(result.runtime_metadata.get("redaction_confidence", "normal"))
     entry = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "modality": result.modality.value,
@@ -29,6 +31,8 @@ def record_audit(result: DetectionResult, config: ExplainabilityConfig) -> Path:
         "artifacts": [str(path) for path in result.artifacts],
         "entity_count": len(result.entities),
         "ffmpeg_fallback": ffmpeg_fallback,
+        "multi_speaker_detected": multi_speaker_detected,
+        "redaction_confidence": redaction_confidence,
         "failure_reason": failure_reason,
         "spans": spans,
         "entities": [

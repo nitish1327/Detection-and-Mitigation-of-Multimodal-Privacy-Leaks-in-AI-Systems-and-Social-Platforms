@@ -35,6 +35,7 @@ class PipelineManager:
             enable_transcription=self.config.audio.enable_transcription,
             transcription_backend=self.config.audio.transcription_backend,
             whisper_model=self.config.audio.whisper_model,
+            app_mode=self.config.app.mode,
         )
         self.audio_mitigator = AudioMitigator(self.config.audio)
         self.video_adapter = VideoAdapter()
@@ -98,6 +99,8 @@ class PipelineManager:
             runtime_metadata={
                 "ffmpeg_fallback": self.audio_mitigator.last_ffmpeg_fallback,
                 "detection_mode": self.text_detector.detection_mode,
+                "multi_speaker_detected": self.audio_adapter.last_multi_speaker_detected,
+                "redaction_confidence": self.audio_adapter.last_redaction_confidence,
             },
         )
         self._attach_audit(result)
