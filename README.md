@@ -39,6 +39,7 @@ tests/
    D:/Capstone/.venv/Scripts/python.exe -m pip install -U pip
    D:/Capstone/.venv/Scripts/python.exe -m pip install -r requirements.txt
    ```
+  The default requirements now include the audio transcription stack, so phone recordings can be processed without extra manual setup.
 2. **Download NLP/OCR models** (after `pip install`):
    ```powershell
    D:/Capstone/.venv/Scripts/python.exe -m spacy download en_core_web_sm
@@ -52,7 +53,7 @@ tests/
   # Scan an image
   D:/Capstone/.venv/Scripts/python.exe -m leakwatch scan-image path/to/photo.jpg
 
-  # Scan audio (expects a sibling .txt transcript; outputs beeped .sanitized.wav)
+  # Scan audio (works with phone recordings like .m4a/.mp3/.wav)
   D:/Capstone/.venv/Scripts/python.exe -m leakwatch scan-audio path/to/recording.wav
 
   # Scan video (extracts sparse frames and sanitizes them via the image pipeline)
@@ -63,7 +64,10 @@ tests/
   ```
 
 ### Sample Media Assets
-- Audio: `samples/audio/demo_call.wav` (plus transcript `demo_call.txt`) demonstrates the `scan-audio` flow. The pipeline emits:
+- Audio: `samples/audio/demo_call.wav` (plus transcript `demo_call.txt`) demonstrates the `scan-audio` flow. For real phone recordings, LeakWatch can:
+  - use companion transcript if present (`<name>.txt`), or
+  - auto-transcribe using Whisper when transcript is missing.
+  Non-WAV inputs are normalized with ffmpeg before mitigation. The pipeline emits:
   - `*.audio.sanitized.txt` (sanitized transcript)
   - `*.audio.beeps.json` (beep windows)
   - `*.sanitized.wav` (audio with sensitive ranges replaced by tone)
@@ -118,6 +122,16 @@ Run the automated tests with pytest:
 ```powershell
 D:/Capstone/.venv/Scripts/python.exe -m pytest -q
 ```
+
+## Phone Audio Quickstart
+1. Install dependencies with `requirements.txt`; it now includes the audio stack by default.
+2. If system `ffmpeg` is not available, LeakWatch falls back to the bundled ffmpeg shipped with `imageio-ffmpeg`.
+3. Copy your recording (for example `my_call.m4a`) into the workspace.
+4. Run:
+```powershell
+D:/Capstone/.venv/Scripts/python.exe -m leakwatch scan-audio samples/audio/my_call.m4a
+```
+5. Check artifacts in `artifacts/` (`*.sanitized.wav`, `*.audio.sanitized.txt`, `*.audio.beeps.json`).
 
 ## Documentation
 - `docs/IMPLEMENTATION_PLAN.md`: bridge between Phase 1 report and this implementation.

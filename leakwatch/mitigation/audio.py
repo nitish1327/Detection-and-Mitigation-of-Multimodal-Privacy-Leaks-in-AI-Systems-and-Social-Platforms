@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import math
+import shutil
+import subprocess
+import tempfile
 import wave
 from array import array
+from contextlib import suppress
 from pathlib import Path
 
 from ..utils.config import AudioConfig
@@ -25,10 +29,8 @@ class AudioMitigator:
         output_path: Path,
     ) -> tuple[Path, list[dict[str, float]]]:
         source_path = Path(audio_path)
-        if source_path.suffix.lower() != ".wav":
-            raise RuntimeError("Audio beeping currently supports only .wav inputs.")
-
-        with wave.open(str(source_path), "rb") as in_wav:
+        normalized_path, cleanup_path = self._normalize_for_beeping(source_path)
+        with wave.open(str(normalized_path), "rb") as in_wav:
             channels = in_wav.getnchannels()
             sample_width = in_wav.getsampwidth()
             frame_rate = in_wav.getframerate()
@@ -36,7 +38,7 @@ class AudioMitigator:
             raw_frames = in_wav.readframes(frame_count)
 
         if sample_width != 2:
-            raise RuntimeError("Audio beeping currently supports 16-bit PCM WAV files only.")
+            raise RuntimeError("Audio normalization failed to produce 16-bit PCM WAV frames.")
 
         duration_seconds = frame_count / frame_rate if frame_rate else 0
         time_ranges = self._ranges_from_entities(transcript, entities, duration_seconds)
@@ -64,7 +66,62 @@ class AudioMitigator:
             out_wav.setframerate(frame_rate)
             out_wav.writeframes(samples.tobytes())
 
+        if cleanup_path is not None:
+            with suppress(FileNotFoundError):
+                cleanup_path.unlink()
+
         return output_path, time_ranges
+
+    def _normalize_for_beeping(self, source_path: Path) -> tuple[Path, Path | None]:
+        if source_path.suffix.lower() == ".wav":
+            try:
+                with wave.open(str(source_path), "rb") as wav_file:
+                    if wav_file.getsampwidth() == 2:
+                        return source_path, None
+            except wave.Error:
+                pass
+
+        ffmpeg_binary = shutil.which(self.config.ffmpeg_binary)
+        if not ffmpeg_binary:
+            ffmpeg_binary = self._bundled_ffmpeg()
+        if not ffmpeg_binary:
+            raise RuntimeError("ffmpeg is required to process non-WAV audio input.")
+
+        tmp_file = tempfile.NamedTemporaryFile(prefix="leakwatch_audio_", suffix=".wav", delete=False)
+        tmp_file_path = Path(tmp_file.name)
+        tmp_file.close()
+
+        command = [
+            ffmpeg_binary,
+            "-y",
+            "-i",
+            str(source_path),
+            "-ac",
+            "1",
+            "-ar",
+            "16000",
+            "-acodec",
+            "pcm_s16le",
+            str(tmp_file_path),
+        ]
+
+        result = subprocess.run(command, capture_output=True, text=True)
+        if result.returncode != 0:
+            with suppress(FileNotFoundError):
+                tmp_file_path.unlink()
+            raise RuntimeError(
+                f"Failed to normalize audio using ffmpeg for {source_path.name}: {result.stderr.strip()}"
+            )
+
+        return tmp_file_path, tmp_file_path
+
+    def _bundled_ffmpeg(self) -> str | None:
+        try:
+            from imageio_ffmpeg import get_ffmpeg_exe
+        except ImportError:
+            return None
+        ffmpeg_exe = get_ffmpeg_exe()
+        return ffmpeg_exe if ffmpeg_exe and Path(ffmpeg_exe).exists() else None
 
     def _ranges_from_entities(
         self,

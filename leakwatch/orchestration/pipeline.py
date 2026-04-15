@@ -30,7 +30,12 @@ class PipelineManager:
         self.text_mitigator = TextMitigator(self.config.text)
         self.image_detector = ImageDetector(self.config.image, text_detector=self.text_detector)
         self.image_mitigator = ImageMitigator(self.config.image)
-        self.audio_adapter = AudioAdapter(self.config.audio.transcript_extension)
+        self.audio_adapter = AudioAdapter(
+            transcript_extension=self.config.audio.transcript_extension,
+            enable_transcription=self.config.audio.enable_transcription,
+            transcription_backend=self.config.audio.transcription_backend,
+            whisper_model=self.config.audio.whisper_model,
+        )
         self.audio_mitigator = AudioMitigator(self.config.audio)
         self.video_adapter = VideoAdapter()
 

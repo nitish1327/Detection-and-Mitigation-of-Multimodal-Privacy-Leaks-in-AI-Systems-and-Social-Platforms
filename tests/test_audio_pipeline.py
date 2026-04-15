@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from leakwatch.adapters import AudioAdapter
 from leakwatch.orchestration import PipelineManager
 from leakwatch.utils.config import (
     AppConfig,
@@ -56,7 +57,7 @@ def test_audio_pipeline_beeps_sensitive_segments(tmp_path: Path) -> None:
             save_image_overlays=False,
             audit_log_path=tmp_path / "audit.log",
         ),
-        audio=AudioConfig(enabled=True),
+        audio=AudioConfig(enabled=True, enable_transcription=False),
     )
 
     manager = PipelineManager(config)
@@ -93,9 +94,23 @@ def test_audio_pipeline_requires_companion_transcript(tmp_path: Path) -> None:
         app=AppConfig(output_dir=tmp_path / "artifacts"),
         text=TextConfig(enable_spacy=False),
         image=ImageConfig(enable_ocr=False),
-        audio=AudioConfig(enabled=True),
+        audio=AudioConfig(enabled=True, enable_transcription=False),
     )
 
     manager = PipelineManager(config)
     with pytest.raises(RuntimeError, match="No transcript found"):
         manager.process_audio(audio_path)
+
+
+def test_audio_adapter_transcribes_when_no_companion_transcript(tmp_path: Path) -> None:
+    audio_path = tmp_path / "phone_recording.m4a"
+    audio_path.write_bytes(b"placeholder")
+
+    adapter = AudioAdapter(
+        transcript_extension=".txt",
+        enable_transcription=True,
+        transcriber=lambda _: "call me at 425-555-1212",
+    )
+
+    text = adapter.to_text(audio_path)
+    assert text == "call me at 425-555-1212"

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List
+from typing import Any, Callable, List
 
 import cv2
 
@@ -15,8 +15,20 @@ LOGGER = get_logger(__name__)
 class AudioAdapter:
 	"""Thin wrapper that maps audio inputs to transcripts for text reuse."""
 
-	def __init__(self, transcript_extension: str = ".txt") -> None:
+	def __init__(
+		self,
+		transcript_extension: str = ".txt",
+		enable_transcription: bool = True,
+		transcription_backend: str = "whisper",
+		whisper_model: str = "base",
+		transcriber: Callable[[Path], str] | None = None,
+	) -> None:
 		self.transcript_extension = transcript_extension
+		self.enable_transcription = enable_transcription
+		self.transcription_backend = transcription_backend
+		self.whisper_model = whisper_model
+		self._transcriber = transcriber
+		self._whisper_model_obj: Any | None = None
 
 	def to_text(self, audio_path: Path) -> str:
 		path = Path(audio_path)
@@ -28,9 +40,38 @@ class AudioAdapter:
 			LOGGER.info("Using companion transcript for audio: %s", transcript_candidate.name)
 			return transcript_candidate.read_text(encoding="utf-8")
 
+		if self.enable_transcription:
+			LOGGER.info("No companion transcript found for %s. Running built-in transcription.", path.name)
+			return self._transcribe(path)
+
 		raise RuntimeError(
 			f"No transcript found for {path.name}. Expected companion file: {transcript_candidate.name}"
 		)
+
+	def _transcribe(self, audio_path: Path) -> str:
+		if self._transcriber is not None:
+			return self._transcriber(audio_path)
+
+		backend = self.transcription_backend.lower().strip()
+		if backend != "whisper":
+			raise RuntimeError(f"Unsupported transcription backend: {self.transcription_backend}")
+
+		try:
+			import whisper  # type: ignore
+		except ImportError as exc:  # pragma: no cover
+			raise RuntimeError(
+				"Built-in transcription requires the optional Whisper package. "
+				"Install it with: pip install openai-whisper"
+			) from exc
+
+		if self._whisper_model_obj is None:
+			self._whisper_model_obj = whisper.load_model(self.whisper_model)
+
+		transcript = self._whisper_model_obj.transcribe(str(audio_path), fp16=False)
+		text = str(transcript.get("text", "")).strip()
+		if not text:
+			raise RuntimeError(f"Transcription produced empty text for {audio_path.name}")
+		return text
 
 
 class VideoAdapter:

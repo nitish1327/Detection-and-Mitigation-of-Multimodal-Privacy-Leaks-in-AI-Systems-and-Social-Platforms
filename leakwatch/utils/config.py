@@ -54,6 +54,10 @@ class ModalityToggle(BaseModel):
 
 class AudioConfig(ModalityToggle):
     transcript_extension: str = ".txt"
+    enable_transcription: bool = True
+    transcription_backend: str = "whisper"
+    whisper_model: str = "base"
+    ffmpeg_binary: str = "ffmpeg"
     beep_frequency_hz: float = 1000.0
     beep_amplitude: float = 0.85
     min_beep_ms: int = 120

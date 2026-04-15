@@ -29,5 +29,14 @@ explainability:
   audit_log_path: "artifacts/audit.log"
 audio:
   enabled: true
+  enable_transcription: true
+  transcription_backend: "whisper"
+  whisper_model: "base"
+  ffmpeg_binary: "ffmpeg"
+  transcript_extension: ".txt"
+  beep_frequency_hz: 1000.0
+  beep_amplitude: 0.85
+  min_beep_ms: 120
+  padding_ms: 80
 video:
   enabled: true
