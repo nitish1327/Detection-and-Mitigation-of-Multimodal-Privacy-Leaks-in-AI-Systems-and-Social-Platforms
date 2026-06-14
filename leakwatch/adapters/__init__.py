@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import subprocess
 import shutil
+import re
 from pathlib import Path
 from typing import Any, Callable, List
 
@@ -146,9 +147,9 @@ class AudioAdapter:
 class VideoAdapter:
 	"""Frame sampler that funnels videos back into the image pipeline."""
 
-	def __init__(self, frame_stride: int = 15, max_frames: int = 5) -> None:
+	def __init__(self, frame_stride: int = 1, max_frames: int | None = None) -> None:
 		self.frame_stride = max(1, frame_stride)
-		self.max_frames = max(1, max_frames)
+		self.max_frames = max_frames if max_frames is None else max(1, max_frames)
 
 	def extract_frames(self, video_path: Path, frame_dir: Path) -> List[Path]:
 		frame_dir = Path(frame_dir)
@@ -161,7 +162,7 @@ class VideoAdapter:
 		extracted: list[Path] = []
 		frame_index = 0
 		saved = 0
-		while saved < self.max_frames:
+		while True:
 			ret, frame = capture.read()
 			if not ret:
 				break
@@ -171,6 +172,8 @@ class VideoAdapter:
 				cv2.imwrite(str(frame_path), frame)
 				extracted.append(frame_path)
 				saved += 1
+				if self.max_frames is not None and saved >= self.max_frames:
+					break
 			frame_index += 1
 
 		capture.release()
@@ -184,39 +187,61 @@ class VideoAdapter:
 		processed_frames: List[Path],
 		output_video_path: Path,
 	) -> Path:
-		if not processed_frames:
-			raise RuntimeError("No processed frames available to reconstruct video")
-
-		first_frame = cv2.imread(str(processed_frames[0]))
-		if first_frame is None:
-			raise RuntimeError(f"Unable to read processed frame: {processed_frames[0]}")
-
-		height, width = first_frame.shape[:2]
-		fps = 10.0
 		capture = cv2.VideoCapture(str(source_video_path))
-		if capture.isOpened():
-			detected_fps = capture.get(cv2.CAP_PROP_FPS)
-			if detected_fps and detected_fps > 0:
-				fps = float(detected_fps)
-		capture.release()
+		if not capture.isOpened():
+			raise RuntimeError(f"Unable to open source video for reconstruction: {source_video_path}")
 
-		temp_output_path = output_video_path.with_name(f"{output_video_path.stem}.tmp.mp4")
-		fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-		writer = cv2.VideoWriter(str(temp_output_path), fourcc, fps, (width, height))
-		if not writer.isOpened():
-			raise RuntimeError(f"Unable to open video writer for: {temp_output_path}")
+		fps = capture.get(cv2.CAP_PROP_FPS)
+		if not fps or fps <= 0:
+			fps = 10.0
+		width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+		height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+		if width <= 0 or height <= 0:
+			ok, first_source = capture.read()
+			if not ok or first_source is None:
+				capture.release()
+				raise RuntimeError("Unable to read source frames for reconstruction")
+			height, width = first_source.shape[:2]
+			capture.set(cv2.CAP_PROP_POS_FRAMES, 0)
 
+		replacements: dict[int, Any] = {}
 		for frame_path in processed_frames:
+			frame_index = self._frame_index_from_name(frame_path)
+			if frame_index is None:
+				continue
 			frame = cv2.imread(str(frame_path))
 			if frame is None:
 				continue
 			if frame.shape[0] != height or frame.shape[1] != width:
 				frame = cv2.resize(frame, (width, height))
-			writer.write(frame)
+			replacements[frame_index] = frame
+
+		temp_output_path = output_video_path.with_name(f"{output_video_path.stem}.tmp.mp4")
+		fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+		writer = cv2.VideoWriter(str(temp_output_path), fourcc, fps, (width, height))
+		if not writer.isOpened():
+			capture.release()
+			raise RuntimeError(f"Unable to open video writer for: {temp_output_path}")
+
+		frame_idx = 0
+		while True:
+			ok, source_frame = capture.read()
+			if not ok or source_frame is None:
+				break
+			output_frame = replacements.get(frame_idx, source_frame)
+			writer.write(output_frame)
+			frame_idx += 1
 
 		writer.release()
+		capture.release()
 		self._transcode_h264(temp_output_path, output_video_path)
 		return output_video_path
+
+	def _frame_index_from_name(self, path: Path) -> int | None:
+		match = re.search(r"_frame_(\d+)", path.stem)
+		if not match:
+			return None
+		return int(match.group(1))
 
 	def _transcode_h264(self, input_path: Path, output_path: Path) -> None:
 		ffmpeg_binary = self._ffmpeg_executable()

@@ -23,9 +23,10 @@ image:
     - "en"
   min_confidence: 0.3
   enable_ocr: true
+  ocr_use_gpu: true
 explainability:
   save_text_spans: true
-  save_image_overlays: true
+  save_image_overlays: false
   audit_log_path: "artifacts/audit.log"
 audio:
   enabled: true
@@ -40,3 +41,6 @@ audio:
   padding_ms: 80
 video:
   enabled: true
+  redaction_mode: "per_frame"
+  carryover_frames: 30
+  frame_stride: 1

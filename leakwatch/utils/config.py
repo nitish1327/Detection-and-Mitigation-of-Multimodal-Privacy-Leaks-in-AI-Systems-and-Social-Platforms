@@ -33,6 +33,7 @@ class ImageConfig(BaseModel):
     text_detection_langs: list[str] = Field(default_factory=lambda: ["en"])
     min_confidence: float = 0.3
     enable_ocr: bool = True
+    ocr_use_gpu: bool = False
 
     @field_validator("face_blur_kernel")
     @classmethod
@@ -51,6 +52,13 @@ class ExplainabilityConfig(BaseModel):
 
 class ModalityToggle(BaseModel):
     enabled: bool = False
+
+
+class VideoConfig(ModalityToggle):
+    redaction_mode: str = "per_frame"  # options: per_frame, carryover, strict
+    carryover_frames: int = 10
+    frame_stride: int = 1
+    max_frames: int | None = None
 
 
 class AudioConfig(ModalityToggle):
@@ -78,7 +86,7 @@ class LeakWatchConfig(BaseModel):
     image: ImageConfig = Field(default_factory=ImageConfig)
     explainability: ExplainabilityConfig = Field(default_factory=ExplainabilityConfig)
     audio: AudioConfig = Field(default_factory=AudioConfig)
-    video: ModalityToggle = Field(default_factory=ModalityToggle)
+    video: VideoConfig = Field(default_factory=VideoConfig)
 
     @classmethod
     def from_mapping(cls, data: dict[str, Any]) -> "LeakWatchConfig":
