@@ -12,7 +12,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, HttpUrl, model_validator
 
-from leakwatch.orchestration import PipelineManager
+from leakwatch.orchestration import PipelineManager, VideoProcessingError
 from leakwatch.utils.config import get_config
 from leakwatch.utils.types import DetectionResult
 
@@ -118,6 +118,8 @@ def scan_video(request: FileScanRequest) -> ScanResponse:
     try:
         result = PIPELINE.process_video(source_path)
         return _build_response(result, request.policy)
+    except VideoProcessingError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     finally:

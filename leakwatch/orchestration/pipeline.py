@@ -15,6 +15,11 @@ from ..utils.config import LeakWatchConfig, get_config
 from ..utils.logging import ensure_dir, get_logger
 from ..utils.types import DetectedEntity, DetectionResult, Modality
 
+
+class VideoProcessingError(RuntimeError):
+    """Raised when a video cannot be inspected and sanitized completely."""
+
+
 LOGGER = get_logger(__name__)
 TEXT_EXTENSIONS = {".txt", ".md", ".json"}
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp"}
@@ -193,7 +198,7 @@ class PipelineManager:
                 },
             )
             self._attach_audit(result)
-            return result
+            raise VideoProcessingError(f"Video processing failed for {source_path.name}: {exc}") from exc
 
     # --- Helpers -------------------------------------------------------
     def _output_path(self, source_path: Path, suffix: str) -> Path:
