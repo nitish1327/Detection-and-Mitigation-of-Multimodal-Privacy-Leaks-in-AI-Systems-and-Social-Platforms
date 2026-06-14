@@ -173,12 +173,14 @@ class PipelineManager:
                     "Video sanitization does not allow max_frames because it would leave "
                     "the remaining output frames uninspected."
                 )
-            frame_paths = self.video_adapter.extract_frames(source_path, frame_dir)
-            if not frame_paths:
+            frames = self.video_adapter.extract_frames(source_path, frame_dir)
+            if not frames:
                 raise RuntimeError("Video contained no decodable frames.")
+            frame_paths = [frame.path for frame in frames]
+            frame_index_by_path = {frame.path: frame.index for frame in frames}
             aggregated_entities: list[DetectedEntity] = []
             artifacts: list[Path] = []
-            processed_frames: list[Path] = []
+            processed_frames: dict[int, Path] = {}
 
             redaction_mode = (self.config.video.redaction_mode or "per_frame").lower().strip()
             if redaction_mode == "per_frame":
@@ -194,7 +196,7 @@ class PipelineManager:
                     artifacts.append(frame_path)
                     if frame_result.mitigated_output:
                         artifacts.append(frame_result.mitigated_output)
-                        processed_frames.append(frame_result.mitigated_output)
+                        processed_frames[frame_index_by_path[frame_path]] = frame_result.mitigated_output
             else:
                 detection_map: dict[Path, list[DetectedEntity]] = {}
                 union_entities: list[DetectedEntity] = []
@@ -231,7 +233,7 @@ class PipelineManager:
                     artifacts.append(frame_path)
                     if frame_result.mitigated_output:
                         artifacts.append(frame_result.mitigated_output)
-                        processed_frames.append(frame_result.mitigated_output)
+                        processed_frames[frame_index_by_path[frame_path]] = frame_result.mitigated_output
 
             output_video_path = self._output_path(source_path, suffix=".sanitized.mp4")
             ensure_dir(output_video_path)
@@ -247,6 +249,7 @@ class PipelineManager:
                 runtime_metadata={
                     "detection_mode": self.text_detector.detection_mode,
                     "redaction_mode": redaction_mode,
+                    **self.video_adapter.last_reconstruction_metadata,
                 },
             )
             self._attach_audit(result)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import cv2
@@ -53,8 +54,9 @@ def test_frame_extraction_expected_count(tmp_path: Path, video_test_config: Leak
     frames = manager.video_adapter.extract_frames(video_path, frame_dir)
 
     assert len(frames) == 5
+    assert [frame.index for frame in frames] == [0, 2, 4, 6, 8]
     for frame in frames:
-        assert frame.exists()
+        assert frame.path.exists()
 
 
 def test_video_pipeline_processes_each_frame_and_reconstructs_output(tmp_path: Path, video_test_config: LeakWatchConfig) -> None:
@@ -102,6 +104,10 @@ def test_video_pipeline_processes_each_frame_and_reconstructs_output(tmp_path: P
     assert result.mitigated_output is not None
     assert result.mitigated_output.exists()
     assert result.mitigated_output.stat().st_size > 0
+    assert result.runtime_metadata["source_frame_count"] == source_frame_count
+    assert result.runtime_metadata["output_frame_count"] == source_frame_count
+    assert result.runtime_metadata["source_fps"] == pytest.approx(5.0, abs=0.01)
+    assert result.runtime_metadata["output_fps"] == pytest.approx(5.0, abs=0.01)
 
     cap = cv2.VideoCapture(str(result.mitigated_output))
     assert cap.isOpened()
@@ -127,6 +133,84 @@ def test_video_pipeline_processes_each_frame_and_reconstructs_output(tmp_path: P
     assert late_mean_bgr[2] > 180
     assert late_mean_bgr[1] < 80
     assert late_mean_bgr[0] < 80
+
+
+def test_reconstruction_uses_explicit_indexes_for_ambiguous_source_name(
+    tmp_path: Path,
+    video_test_config: LeakWatchConfig,
+) -> None:
+    video_path = tmp_path / "event_frame_2024.mp4"
+    _write_synthetic_video(video_path, frame_count=4, fps=4)
+    manager = PipelineManager(video_test_config)
+
+    frames = manager.video_adapter.extract_frames(video_path, tmp_path / "frames")
+    processed: dict[int, Path] = {}
+    for frame in frames:
+        image = cv2.imread(str(frame.path))
+        assert image is not None
+        image[:, :] = (0, 255, 0) if frame.index == 2 else (255, 0, 0)
+        output_path = tmp_path / f"processed_{frame.index}.png"
+        assert cv2.imwrite(str(output_path), image)
+        processed[frame.index] = output_path
+
+    output_path = tmp_path / "reconstructed.mp4"
+    manager.video_adapter.reconstruct_video(video_path, processed, output_path)
+
+    capture = cv2.VideoCapture(str(output_path))
+    capture.set(cv2.CAP_PROP_POS_FRAMES, 2)
+    ok, frame_two = capture.read()
+    capture.release()
+    assert ok and frame_two is not None
+    mean_bgr = frame_two.mean(axis=(0, 1))
+    assert mean_bgr[1] > 180
+    assert mean_bgr[0] < 80
+    assert mean_bgr[2] < 80
+
+
+def test_reconstruction_preserves_source_audio(tmp_path: Path, video_test_config: LeakWatchConfig) -> None:
+    silent_video = tmp_path / "silent.mp4"
+    source_video = tmp_path / "with_audio.mp4"
+    _write_synthetic_video(silent_video, frame_count=8, fps=4)
+
+    manager = PipelineManager(video_test_config)
+    ffmpeg = manager.video_adapter._ffmpeg_executable()
+    if not ffmpeg:
+        pytest.skip("ffmpeg is required for audio preservation testing")
+    mux_result = subprocess.run(
+        [
+            ffmpeg,
+            "-y",
+            "-i",
+            str(silent_video),
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=1000:sample_rate=44100:duration=2",
+            "-map",
+            "0:v:0",
+            "-map",
+            "1:a:0",
+            "-c:v",
+            "copy",
+            "-c:a",
+            "aac",
+            "-shortest",
+            str(source_video),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert mux_result.returncode == 0, mux_result.stderr
+
+    result = manager.process_video(source_video)
+
+    assert result.mitigated_output is not None
+    assert result.runtime_metadata["source_has_audio"] is True
+    assert result.runtime_metadata["output_has_audio"] is True
+    assert result.runtime_metadata["output_duration_seconds"] == pytest.approx(
+        result.runtime_metadata["source_duration_seconds"],
+        abs=0.02,
+    )
 
 
 @pytest.mark.parametrize(

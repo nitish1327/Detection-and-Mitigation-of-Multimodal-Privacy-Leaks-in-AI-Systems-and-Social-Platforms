@@ -4,15 +4,24 @@ from __future__ import annotations
 
 import subprocess
 import shutil
-import re
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, List
+from typing import Any, Callable, List, Mapping
 
 import cv2
 
 from ..utils.logging import ensure_dir, get_logger
 
 LOGGER = get_logger(__name__)
+
+
+@dataclass(frozen=True)
+class VideoFrame:
+	"""Extracted frame with explicit source timing and identity."""
+
+	index: int
+	timestamp_seconds: float
+	path: Path
 
 
 class AudioAdapter:
@@ -150,8 +159,9 @@ class VideoAdapter:
 	def __init__(self, frame_stride: int = 1, max_frames: int | None = None) -> None:
 		self.frame_stride = max(1, frame_stride)
 		self.max_frames = max_frames if max_frames is None else max(1, max_frames)
+		self.last_reconstruction_metadata: dict[str, Any] = {}
 
-	def extract_frames(self, video_path: Path, frame_dir: Path) -> List[Path]:
+	def extract_frames(self, video_path: Path, frame_dir: Path) -> List[VideoFrame]:
 		frame_dir = Path(frame_dir)
 		frame_dir.mkdir(parents=True, exist_ok=True)
 		capture = cv2.VideoCapture(str(video_path))
@@ -159,7 +169,8 @@ class VideoAdapter:
 			LOGGER.warning("Unable to open video: %s", video_path)
 			return []
 
-		extracted: list[Path] = []
+		fps = float(capture.get(cv2.CAP_PROP_FPS) or 0.0)
+		extracted: list[VideoFrame] = []
 		frame_index = 0
 		saved = 0
 		while True:
@@ -169,8 +180,17 @@ class VideoAdapter:
 			if frame_index % self.frame_stride == 0:
 				frame_path = frame_dir / f"{video_path.stem}_frame_{frame_index:05d}.png"
 				ensure_dir(frame_path)
-				cv2.imwrite(str(frame_path), frame)
-				extracted.append(frame_path)
+				if not cv2.imwrite(str(frame_path), frame):
+					capture.release()
+					raise RuntimeError(f"Unable to write extracted video frame: {frame_path}")
+				timestamp_seconds = (frame_index / fps) if fps > 0 else 0.0
+				extracted.append(
+					VideoFrame(
+						index=frame_index,
+						timestamp_seconds=timestamp_seconds,
+						path=frame_path,
+					)
+				)
 				saved += 1
 				if self.max_frames is not None and saved >= self.max_frames:
 					break
@@ -184,16 +204,19 @@ class VideoAdapter:
 	def reconstruct_video(
 		self,
 		source_video_path: Path,
-		processed_frames: List[Path],
+		processed_frames: Mapping[int, Path],
 		output_video_path: Path,
 	) -> Path:
+		self.last_reconstruction_metadata = {}
 		capture = cv2.VideoCapture(str(source_video_path))
 		if not capture.isOpened():
 			raise RuntimeError(f"Unable to open source video for reconstruction: {source_video_path}")
 
-		fps = capture.get(cv2.CAP_PROP_FPS)
+		fps = float(capture.get(cv2.CAP_PROP_FPS) or 0.0)
 		if not fps or fps <= 0:
-			fps = 10.0
+			capture.release()
+			raise RuntimeError("Source video does not expose a valid FPS value")
+		expected_frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
 		width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
 		height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
 		if width <= 0 or height <= 0:
@@ -205,13 +228,11 @@ class VideoAdapter:
 			capture.set(cv2.CAP_PROP_POS_FRAMES, 0)
 
 		replacements: dict[int, Any] = {}
-		for frame_path in processed_frames:
-			frame_index = self._frame_index_from_name(frame_path)
-			if frame_index is None:
-				continue
+		for frame_index, frame_path in processed_frames.items():
 			frame = cv2.imread(str(frame_path))
 			if frame is None:
-				continue
+				capture.release()
+				raise RuntimeError(f"Unable to read processed video frame: {frame_path}")
 			if frame.shape[0] != height or frame.shape[1] != width:
 				frame = cv2.resize(frame, (width, height))
 			replacements[frame_index] = frame
@@ -234,47 +255,104 @@ class VideoAdapter:
 
 		writer.release()
 		capture.release()
-		self._transcode_h264(temp_output_path, output_video_path)
+		if expected_frame_count > 0 and frame_idx != expected_frame_count:
+			temp_output_path.unlink(missing_ok=True)
+			raise RuntimeError(
+				f"Source decode ended early: expected {expected_frame_count} frames, decoded {frame_idx}"
+			)
+		if len(replacements) != frame_idx:
+			temp_output_path.unlink(missing_ok=True)
+			raise RuntimeError(
+				f"Processed frame coverage mismatch: expected {frame_idx} replacements, got {len(replacements)}"
+			)
+
+		self._transcode_h264(temp_output_path, source_video_path, output_video_path)
+		output_frame_count, output_fps = self._video_metrics(output_video_path)
+		if output_frame_count != frame_idx:
+			raise RuntimeError(
+				f"Output frame count mismatch: expected {frame_idx}, got {output_frame_count}"
+			)
+		fps_tolerance = max(0.01, fps * 0.001)
+		if abs(output_fps - fps) > fps_tolerance:
+			raise RuntimeError(f"Output FPS mismatch: expected {fps:.6f}, got {output_fps:.6f}")
+
+		source_has_audio = self._has_audio_stream(source_video_path)
+		output_has_audio = self._has_audio_stream(output_video_path)
+		if source_has_audio and not output_has_audio:
+			raise RuntimeError("Source audio stream was not preserved in reconstructed video")
+
+		self.last_reconstruction_metadata = {
+			"source_frame_count": frame_idx,
+			"output_frame_count": output_frame_count,
+			"source_fps": fps,
+			"output_fps": output_fps,
+			"source_duration_seconds": frame_idx / fps,
+			"output_duration_seconds": output_frame_count / output_fps,
+			"source_has_audio": source_has_audio,
+			"output_has_audio": output_has_audio,
+		}
 		return output_video_path
 
-	def _frame_index_from_name(self, path: Path) -> int | None:
-		match = re.search(r"_frame_(\d+)", path.stem)
-		if not match:
-			return None
-		return int(match.group(1))
-
-	def _transcode_h264(self, input_path: Path, output_path: Path) -> None:
+	def _transcode_h264(self, input_path: Path, source_path: Path, output_path: Path) -> None:
 		ffmpeg_binary = self._ffmpeg_executable()
 		if not ffmpeg_binary:
-			LOGGER.warning("ffmpeg not available; using fallback MP4 encoding for %s", output_path.name)
-			input_path.replace(output_path)
-			return
+			input_path.unlink(missing_ok=True)
+			raise RuntimeError("ffmpeg is required to preserve video audio and container timing")
 
 		command = [
 			ffmpeg_binary,
 			"-y",
 			"-i",
 			str(input_path),
+			"-i",
+			str(source_path),
+			"-map",
+			"0:v:0",
+			"-map",
+			"1:a?",
 			"-c:v",
 			"libx264",
+			"-c:a",
+			"aac",
 			"-pix_fmt",
 			"yuv420p",
 			"-movflags",
 			"+faststart",
-			"-an",
+			"-map_metadata",
+			"1",
 			str(output_path),
 		]
 		result = subprocess.run(command, capture_output=True, text=True)
 		if result.returncode != 0:
-			LOGGER.warning(
-				"H.264 transcode failed for %s (%s); using fallback MP4 encoding.",
-				output_path.name,
-				result.stderr.strip(),
+			input_path.unlink(missing_ok=True)
+			raise RuntimeError(
+				f"H.264 transcode failed for {output_path.name}: {result.stderr.strip()}"
 			)
-			input_path.replace(output_path)
-			return
 		if input_path.exists():
 			input_path.unlink()
+
+	def _video_metrics(self, path: Path) -> tuple[int, float]:
+		capture = cv2.VideoCapture(str(path))
+		if not capture.isOpened():
+			raise RuntimeError(f"Unable to open reconstructed video for validation: {path}")
+		frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+		fps = float(capture.get(cv2.CAP_PROP_FPS) or 0.0)
+		capture.release()
+		if frame_count <= 0 or fps <= 0:
+			raise RuntimeError(f"Reconstructed video has invalid metrics: frames={frame_count}, fps={fps}")
+		return frame_count, fps
+
+	def _has_audio_stream(self, path: Path) -> bool:
+		ffmpeg_binary = self._ffmpeg_executable()
+		if not ffmpeg_binary:
+			raise RuntimeError("ffmpeg is required to validate video audio streams")
+		result = subprocess.run(
+			[ffmpeg_binary, "-hide_banner", "-i", str(path)],
+			capture_output=True,
+			text=True,
+		)
+		probe_text = f"{result.stdout}\n{result.stderr}"
+		return "Audio:" in probe_text
 
 	def _ffmpeg_executable(self) -> str | None:
 		system_ffmpeg = shutil.which("ffmpeg")
