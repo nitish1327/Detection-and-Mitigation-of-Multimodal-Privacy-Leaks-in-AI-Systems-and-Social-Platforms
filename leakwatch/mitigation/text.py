@@ -96,58 +96,58 @@ class TextMitigator:
         label = entity.label.upper()
         
         # Identity & Contact
-        if label in {"PERSON", "NAME"}:
+        if "PERSON" in label or "NAME" in label:
             gender = entity.metadata.get("gender")
             if gender == "male":
                 return self.faker.name_male()
             elif gender == "female":
                 return self.faker.name_female()
             return self.faker.name()
-        if label in {"EMAIL", "EMAIL_ADDRESS"}:
+        if "EMAIL" in label:
             return self.faker.email()
-        if label in {"PHONE", "PHONE_NUMBER", "TELEPHONE"}:
+        if "PHONE" in label or "TELEPHONE" in label:
             return self.faker.phone_number()
-        if label == "USER_NAME":
+        if "USER_NAME" in label:
             return self.faker.user_name()
-        if label == "PASSWORD":
+        if "PASSWORD" in label:
             return self.faker.password()
             
         # Location & Network
-        if label in {"ORG", "ORGANIZATION", "COMPANY"}:
+        if "ORG" in label or "COMPANY" in label:
             return self.faker.company()
-        if label in {"GPE", "LOCATION", "CITY"}:
+        if "GPE" in label or "LOCATION" in label or "CITY" in label:
             return self.faker.city()
-        if label in {"ADDRESS", "STREET_ADDRESS"}:
+        if "ADDRESS" in label or "STREET" in label:
             return self.faker.address().replace("\n", ", ")
-        if label == "ZIP_CODE":
+        if "ZIP" in label:
             return self.faker.zipcode()
-        if label in {"IP_ADDRESS", "IPV4", "IPV6"}:
+        if "IP" in label or "IPV4" in label or "IPV6" in label:
             return self.faker.ipv4()
-        if label == "MAC_ADDRESS":
+        if "MAC" in label:
             return self.faker.mac_address()
-        if label == "URL":
+        if "URL" in label:
             return self.faker.url()
 
         # Financial & IDs
-        if label in {"CREDIT_CARD", "CREDIT_CARD_NUMBER"}:
+        if "CREDIT" in label or "CARD_NUMBER" in label:
             return self.faker.credit_card_number()
-        if label == "IBAN":
+        if "IBAN" in label:
             return self.faker.iban()
-        if label == "SWIFT":
+        if "SWIFT" in label:
             return self.faker.swift()
-        if label == "SSN":
+        if "SSN" in label or "AADHAR" in label:
             return self.faker.ssn()
-        if label == "PASSPORT":
+        if "PASSPORT" in label:
             return self.faker.passport_number()
             
         # Misc
-        if label == "DATE":
+        if "DATE" in label:
             return str(self.faker.date())
-        if label == "CARDINAL":
+        if "CARDINAL" in label or "NUMBER" in label:
             return str(self.faker.random_int(min=0, max=999999))
-        if label == "LICENSE_PLATE":
-            return self.faker.license_plate()
-        if label == "LICENSE":
+        if "LICENSE" in label:
+            if "PLATE" in label:
+                return self.faker.license_plate()
             return self.faker.bothify("??## #### #######", letters="ABCDEFGHIJKLMNOPQRSTUVWXYZ")
 
         return f"<{label}>"

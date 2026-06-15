@@ -139,6 +139,23 @@ class TextDetector:
             if not (ent.text and self._is_field_label(ent.text))
         ]
 
+        # Filter out false positive names/persons that contain document keywords
+        non_name_words = {
+            "university", "license", "driving", "government", "india", 
+            "blood", "group", "card", "issue", "expiry", "date", 
+            "birth", "class", "vehicle", "signature", "photo", "thumb",
+            "impression", "holder", "authority", "union", "territory",
+            "state", "transport"
+        }
+        filtered_entities = [
+            ent for ent in filtered_entities
+            if not (
+                ent.label.upper() in {"PERSON", "NAME"} and 
+                ent.text and 
+                any(w in ent.text.lower().split() for w in non_name_words)
+            )
+        ]
+
         # Primitive document-level gender detection for name replacement
         text_lower = text.lower()
         male_score = sum(text_lower.count(w) for w in [" he ", " his ", " him ", " male "])

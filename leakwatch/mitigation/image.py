@@ -83,8 +83,8 @@ class ImageMitigator:
         # wrong sizes.  We keep only the highest-priority entity per bbox.
         _label_priority = {
             "address": 0, "STREET_ADDRESS": 0,
-            "PERSON": 1, "NAME": 1,
-            "license": 2,
+            "PERSON": 1, "NAME": 1, "name": 1,
+            "license": 2, "roll_number": 2,
             "GPE": 3, "LOCATION": 3,
             "ORG": 4,
             "dob": 5,
@@ -121,15 +121,19 @@ class ImageMitigator:
                 if smaller > 0 and (inter / smaller) > threshold:
                     return True
 
-            # Vertical adjacency: same X region, within one line-height gap
-            x_overlap = min(ax2, bx2) - max(ax1, bx1)
-            min_w = min(a.bbox.width, b.bbox.width)
-            if min_w > 0 and x_overlap / min_w > 0.5:
-                gap = max(0, max(ay1, by1) - min(ay2, by2))
-                line_h = max(a.bbox.height, b.bbox.height)
-                if gap < line_h * 0.5:
-                    return True
-
+            # Vertical adjacency: only for address fields of the same field class,
+            # to avoid merging separate fields like name, dob, and roll number
+            is_address_a = a.label in {"address", "STREET_ADDRESS", "GPE", "LOCATION"}
+            is_address_b = b.label in {"address", "STREET_ADDRESS", "GPE", "LOCATION"}
+            if is_address_a and is_address_b:
+                x_overlap = min(ax2, bx2) - max(ax1, bx1)
+                min_w = min(a.bbox.width, b.bbox.width)
+                if min_w > 0 and x_overlap / min_w > 0.5:
+                    gap = max(0, max(ay1, by1) - min(ay2, by2))
+                    line_h = max(a.bbox.height, b.bbox.height)
+                    if gap < line_h * 0.5:
+                        return True
+ 
             return False
 
         # Separate face/qr (always processed) from text PII (needs dedup)
@@ -190,8 +194,8 @@ class ImageMitigator:
                 continue
 
             # Compute padded region
-            is_text_pii = entity.label not in {"face", "qr_code"}
-            pad_pct = 0.05 if is_text_pii else self.config.padding_percent
+            is_text_pii = entity.label not in {"face", "qr_code", "person"}
+            pad_pct = 0.0 if is_text_pii else self.config.padding_percent
             padding = int(max(entity.bbox.width, entity.bbox.height) * pad_pct)
             x = max(0, int(entity.bbox.x) - padding)
             y = max(0, int(entity.bbox.y) - padding)
@@ -277,7 +281,7 @@ class ImageMitigator:
         return result
 
     # ------------------------------------------------------------------
-    # 2. FACE – natural ID-photo replacement
+    # 2. FACE – identity-altering perturbation (primary) or asset swap (fallback)
     # ------------------------------------------------------------------
     def _handle_face(
         self,
@@ -288,11 +292,53 @@ class ImageMitigator:
         x: int, y: int, w: int, h: int,
         image_identity_asset: np.ndarray | None,
     ) -> Tuple[np.ndarray, str, np.ndarray | None]:
-        """Replace face with gender-matched asset that looks like a natural ID photo."""
+        """Alter face identity while preserving natural appearance.
+
+        Primary strategy: geometrically warp the original face to change
+        identity while keeping skin tone, lighting, hair, clothing, and
+        background intact.
+
+        Fallback: paste a stock asset with improved color adaptation when
+        warping cannot produce a convincing result.
+        """
 
         img_h, img_w = image.shape[:2]
 
-        # Pick asset based on detected gender
+        # --- Try perturbation first (keeps everything natural) ---
+        perturbed = self._perturb_face(original, x, y, w, h)
+        if perturbed is not None:
+            # Successfully perturbed — paste it back with feathered edges
+            # Expand slightly beyond the face bbox to cover forehead/chin
+            pad_x = int(w * 0.15)
+            pad_y = int(h * 0.20)
+            px = max(0, x - pad_x)
+            py = max(0, y - pad_y)
+            pw = min(img_w - px, w + 2 * pad_x)
+            ph = min(img_h - py, h + 2 * pad_y)
+
+            perturbed_region = perturbed[py : py + ph, px : px + pw]
+            if perturbed_region.size == 0 or perturbed_region.shape[:2] != (ph, pw):
+                perturbed_region = cv2.resize(perturbed[y:y+h, x:x+w], (pw, ph))
+
+            # Create feathered mask for seamless blending
+            mask = np.zeros((ph, pw), dtype=np.uint8)
+            margin = max(2, min(pw, ph) // 10)
+            mask[margin:ph - margin, margin:pw - margin] = 255
+            feather_k = max(3, margin * 2 + 1)
+            if feather_k % 2 == 0:
+                feather_k += 1
+            mask = cv2.GaussianBlur(mask, (feather_k, feather_k), margin * 0.6)
+
+            alpha = mask.astype(np.float32) / 255.0
+            alpha_3ch = cv2.merge([alpha, alpha, alpha])
+            current_roi = image[py : py + ph, px : px + pw]
+            blended = (perturbed_region.astype(np.float32) * alpha_3ch +
+                       current_roi.astype(np.float32) * (1.0 - alpha_3ch))
+            image[py : py + ph, px : px + pw] = blended.clip(0, 255).astype(np.uint8)
+
+            return image, "[PERTURBED_FACE]", image_identity_asset
+
+        # --- Fallback: stock asset replacement with improved blending ---
         gender = entity.metadata.get("gender", "generic")
         if image_identity_asset is None:
             image_identity_asset = self._face_assets.get(gender)
@@ -301,56 +347,75 @@ class ImageMitigator:
 
         asset = image_identity_asset
         if asset is None:
-            # Fallback: heavy blur
             image[y : y + h, x : x + w] = cv2.GaussianBlur(roi, (99, 99), 30)
             return image, "[BLURRED_FACE]", None
 
-        # ------- Expand the replacement region to cover the full ID photo area -------
-        # Heavier blur fallback if asset is missing or out of bounds
-        photo_x = max(0, x - int(w * 0.5))
-        photo_y = max(0, y - int(h * 0.3))
-        photo_w = min(img_w - photo_x, int(w * 2.0))
-        photo_h = min(img_h - photo_y, int(h * 2.8))
+        # Tighter region expansion (head+neck only, not full shoulders)
+        photo_x = max(0, x - int(w * 0.35))
+        photo_y = max(0, y - int(h * 0.25))
+        photo_w = min(img_w - photo_x, int(w * 1.7))
+        photo_h = min(img_h - photo_y, int(h * 2.0))
 
-        # Get the photo region from original for color reference
         photo_roi = original[photo_y : photo_y + photo_h, photo_x : photo_x + photo_w]
         if photo_roi.size == 0:
             photo_roi = roi
             photo_x, photo_y, photo_w, photo_h = x, y, w, h
 
-        # ------- Resize full asset to fill the photo region -------
-        # Heavier blur fallback if asset is missing
+        # Resize asset to fill the photo region
+
         ah, aw = asset.shape[:2]
-        # Crop top portion of asset (head and upper shoulders, skip bottom)
         crop_top = int(ah * 0.02)
         crop_bottom = int(ah * 0.85)
         crop_left = int(aw * 0.05)
         crop_right = int(aw * 0.95)
         asset_crop = asset[crop_top:crop_bottom, crop_left:crop_right]
-
-        # Resize to fill the photo region
         face_resized = cv2.resize(asset_crop, (photo_w, photo_h), interpolation=cv2.INTER_LANCZOS4)
 
-        # ------- Skin tone adaptation via LAB color space -------
-        # LAB gives perceptually uniform color matching (much better than BGR)
+        # --- Stronger LAB color adaptation (85% blend to target) ---
         face_lab = cv2.cvtColor(face_resized, cv2.COLOR_BGR2LAB).astype(np.float32)
         roi_lab = cv2.cvtColor(photo_roi, cv2.COLOR_BGR2LAB).astype(np.float32)
 
         for ch in range(3):
             m_roi, s_roi = cv2.meanStdDev(roi_lab[:, :, ch])
             m_face, s_face = cv2.meanStdDev(face_lab[:, :, ch])
-            # Blend: 60% adapt to document colors, 40% keep original asset colors
             scale = (s_roi[0][0] / (s_face[0][0] + 1e-6))
-            scale = 0.4 + 0.6 * min(scale, 2.0)  # clamp to prevent over-adaptation
+            scale = 0.15 + 0.85 * min(scale, 2.0)
             face_lab[:, :, ch] = (
-                (face_lab[:, :, ch] - m_face[0][0]) * scale + 
-                m_face[0][0] * 0.4 + m_roi[0][0] * 0.6
+                (face_lab[:, :, ch] - m_face[0][0]) * scale +
+                m_face[0][0] * 0.15 + m_roi[0][0] * 0.85
             )
 
         face_lab = face_lab.clip(0, 255).astype(np.uint8)
         face_matched = cv2.cvtColor(face_lab, cv2.COLOR_LAB2BGR)
 
-        # ------- Match sharpness/blur level to document -------
+        # --- Background color matching ---
+        # Extract dominant bg color from photo_roi borders and apply to asset bg
+        border_pixels = np.concatenate([
+            photo_roi[0, :], photo_roi[-1, :],
+            photo_roi[:, 0], photo_roi[:, -1],
+        ])
+        bg_color = np.median(border_pixels, axis=0).astype(np.uint8)
+
+        # Detect asset background via simple thresholding in LAB
+        face_gray = cv2.cvtColor(face_matched, cv2.COLOR_BGR2GRAY)
+        # Background tends to be relatively uniform; detect via edges
+        edges = cv2.Canny(face_matched, 30, 100)
+        bg_mask = cv2.dilate(edges, None, iterations=3)
+        bg_mask = cv2.bitwise_not(bg_mask)
+        # Erode to keep only confident background pixels
+        bg_mask = cv2.erode(bg_mask, None, iterations=5)
+
+        # Tint the background region toward the original photo background color
+        bg_color_img = np.full_like(face_matched, bg_color)
+        bg_alpha = (bg_mask.astype(np.float32) / 255.0)
+        bg_alpha_3ch = cv2.merge([bg_alpha, bg_alpha, bg_alpha])
+        # 50% blend to tint background without making it fully flat
+        face_matched = (
+            face_matched.astype(np.float32) * (1.0 - bg_alpha_3ch * 0.5) +
+            bg_color_img.astype(np.float32) * (bg_alpha_3ch * 0.5)
+        ).clip(0, 255).astype(np.uint8)
+
+        # Match sharpness
         roi_gray = cv2.cvtColor(photo_roi, cv2.COLOR_BGR2GRAY)
         roi_sharpness = cv2.Laplacian(roi_gray, cv2.CV_64F).var()
         if roi_sharpness < 300:
@@ -358,26 +423,24 @@ class ImageMitigator:
             ks = int(round(sigma * 3.0)) * 2 + 1
             face_matched = cv2.GaussianBlur(face_matched, (ks, ks), sigma)
 
-        # ------- Create a full rectangular mask with feathered edges -------
+        # Feathered mask
         mask = np.zeros((photo_h, photo_w), dtype=np.uint8)
         margin = max(3, min(photo_w, photo_h) // 12)
         mask[margin:photo_h - margin, margin:photo_w - margin] = 255
-        # Heavier feathering for natural edge blend
         feather_k = margin * 2 + 1
         if feather_k % 2 == 0:
             feather_k += 1
         mask = cv2.GaussianBlur(mask, (feather_k, feather_k), margin * 0.7)
 
-        # ------- Add subtle JPEG compression noise to match document quality -------
+        # JPEG noise matching
         encode_param = [cv2.IMWRITE_JPEG_QUALITY, 85]
         _, enc = cv2.imencode('.jpg', face_matched, encode_param)
         face_matched = cv2.imdecode(enc, cv2.IMREAD_COLOR)
         if face_matched.shape[:2] != (photo_h, photo_w):
             face_matched = cv2.resize(face_matched, (photo_w, photo_h))
 
-        # ------- Blend into the image -------
+        # Blend into image
         if not self.config.only_mitigated_info:
-            # Alpha blend with feathered mask for clean edges
             alpha = mask.astype(np.float32) / 255.0
             alpha_3ch = cv2.merge([alpha, alpha, alpha])
             current_roi = image[photo_y : photo_y + photo_h, photo_x : photo_x + photo_w]
@@ -388,6 +451,278 @@ class ImageMitigator:
             image[photo_y : photo_y + photo_h, photo_x : photo_x + photo_w] = face_matched
 
         return image, "[REPLACED_FACE]", image_identity_asset
+
+    # ------------------------------------------------------------------
+    # 2b. Face perturbation — warp original face to alter identity
+    # ------------------------------------------------------------------
+    def _perturb_face(
+        self,
+        original: np.ndarray,
+        x: int, y: int, w: int, h: int,
+    ) -> np.ndarray | None:
+        """Geometrically warp the face to alter identity while keeping it natural.
+
+        Uses a grid-based piecewise affine warp to shift facial features:
+        - Eyes are shifted/resized
+        - Nose region is widened/narrowed
+        - Jawline is altered
+        - Face proportions (width/height) change subtly
+
+        The result looks like a real person but is NOT the original identity.
+        Skin tone, lighting, background, hair, and clothing are all preserved.
+
+        Returns the full image with the face region warped, or None if
+        the face is too small for convincing perturbation.
+        """
+        img_h, img_w = original.shape[:2]
+
+        # Need a reasonable face size for grid warping to look good
+        if w < 40 or h < 40:
+            return None
+
+        # Work on an expanded region around the face for smooth transitions
+        expand = 0.6
+        ex = max(0, int(x - w * expand))
+        ey = max(0, int(y - h * expand))
+        ew = min(img_w - ex, int(w * (1 + 2 * expand)))
+        eh = min(img_h - ey, int(h * (1 + 2 * expand)))
+
+        if ew < 20 or eh < 20:
+            return None
+
+        roi = original[ey : ey + eh, ex : ex + ew].copy()
+        rh, rw = roi.shape[:2]
+
+        # Face center relative to the ROI
+        cx = (x - ex) + w // 2
+        cy = (y - ey) + h // 2
+
+        # Use deterministic seed based on face position for consistency
+        rng = np.random.RandomState(seed=(x * 7 + y * 13 + w * 3) % (2**31))
+
+        # --- Build source and destination control points for warping ---
+        # Dense grid for fine-grained control over facial feature distortion
+        grid_rows, grid_cols = 8, 8
+
+        def _build_warp_points(rng_state, roi_w, roi_h, face_cx, face_cy, face_w, face_h):
+            """Build src/dst point pairs for one warp pass."""
+            src_pts_list = []
+            dst_pts_list = []
+            for r in range(grid_rows):
+                for c in range(grid_cols):
+                    px = int(c * roi_w / (grid_cols - 1))
+                    py_pt = int(r * roi_h / (grid_rows - 1))
+                    src_pts_list.append([px, py_pt])
+
+                    # Distance from face center (normalized to face size)
+                    ddx = (px - face_cx) / (face_w / 2 + 1e-6)
+                    ddy = (py_pt - face_cy) / (face_h / 2 + 1e-6)
+                    dist = np.sqrt(ddx * ddx + ddy * ddy)
+
+                    # Perturb points within 1.5 face radii (wide coverage)
+                    if dist < 1.5:
+                        # Smooth falloff from center to edge
+                        strength = max(0, 1.0 - dist / 1.5) ** 0.8
+                        # Moderate shift: 11% of face size
+                        max_shift = min(face_w, face_h) * 0.11
+
+                        shift_x = 0.0
+                        shift_y = 0.0
+
+                        # Eye region (upper face): shift to change eye spacing/shape
+                        if -0.9 < ddy < -0.1 and abs(ddx) < 1.0:
+                            shift_x = rng_state.uniform(-1, 1) * max_shift * 0.9
+                            shift_y = rng_state.uniform(-0.6, 0.6) * max_shift * 0.6
+
+                        # Nose region (center): widen or narrow strongly
+                        elif -0.3 < ddy < 0.4 and abs(ddx) < 0.6:
+                            widen = rng_state.choice([-1, 1])
+                            shift_x = widen * (np.sign(ddx) if abs(ddx) > 0.1 else rng_state.choice([-1, 1])) * max_shift * 0.8
+                            shift_y = rng_state.uniform(-0.5, 0.5) * max_shift * 0.6
+
+                        # Mouth region: stretch or compress
+                        elif 0.3 < ddy < 0.7 and abs(ddx) < 0.7:
+                            shift_x = rng_state.uniform(-1, 1) * max_shift * 0.7
+                            shift_y = rng_state.uniform(-0.6, 0.6) * max_shift * 0.5
+
+                        # Jaw/chin region (lower face): reshape jawline
+                        elif 0.5 < ddy < 1.3 and abs(ddx) < 1.2:
+                            shift_x = rng_state.uniform(-1, 1) * max_shift * 0.8
+                            shift_y = rng_state.uniform(-0.3, 0.6) * max_shift * 0.5
+
+                        # Forehead region
+                        elif ddy < -0.7 and abs(ddx) < 1.0:
+                            shift_x = rng_state.uniform(-1, 1) * max_shift * 0.6
+                            shift_y = rng_state.uniform(-1, 0.5) * max_shift * 0.5
+
+                        # Cheek/general face area
+                        else:
+                            shift_x = rng_state.uniform(-1, 1) * max_shift * 0.7
+                            shift_y = rng_state.uniform(-1, 1) * max_shift * 0.5
+
+                        shift_x *= strength
+                        shift_y *= strength
+
+                        dst_pts_list.append([
+                            np.clip(px + shift_x, 0, roi_w - 1),
+                            np.clip(py_pt + shift_y, 0, roi_h - 1),
+                        ])
+                    else:
+                        dst_pts_list.append([px, py_pt])
+            return np.float32(src_pts_list), np.float32(dst_pts_list)
+
+        # --- Apply single-pass warping for identity change ---
+        src_pts, dst_pts = _build_warp_points(rng, rw, rh, cx, cy, w, h)
+        warped = self._piecewise_affine_warp(roi, src_pts, dst_pts, grid_rows, grid_cols)
+        if warped is None:
+            return None
+
+        # --- Smooth out triangle seam artifacts with bilateral filter ---
+        # Bilateral filter preserves edges (face features stay sharp) while
+        # smoothing out the subtle seam lines from piecewise affine warping
+        face_rx = max(0, x - ex)
+        face_ry = max(0, y - ey)
+        face_rw_clip = min(rw - face_rx, w)
+        face_rh_clip = min(rh - face_ry, h)
+        # Only smooth the face region, leave surroundings untouched
+        face_sub = warped[face_ry:face_ry + face_rh_clip, face_rx:face_rx + face_rw_clip].copy()
+        face_sub_smooth = cv2.bilateralFilter(face_sub, d=7, sigmaColor=40, sigmaSpace=40)
+        # Blend smoothed into warped with a soft mask
+        smooth_mask = np.zeros((rh, rw), dtype=np.float32)
+        inner_m = max(3, min(face_rw_clip, face_rh_clip) // 8)
+        smooth_mask[face_ry + inner_m:face_ry + face_rh_clip - inner_m,
+                    face_rx + inner_m:face_rx + face_rw_clip - inner_m] = 1.0
+        smooth_mask = cv2.GaussianBlur(smooth_mask, (15, 15), 0)
+        smooth_3ch = cv2.merge([smooth_mask, smooth_mask, smooth_mask])
+        # Reconstruct: smoothed face + original surrounding
+        warped_smooth = warped.copy()
+        warped_smooth[face_ry:face_ry + face_rh_clip, face_rx:face_rx + face_rw_clip] = face_sub_smooth
+        warped = (warped_smooth.astype(np.float32) * smooth_3ch +
+                  warped.astype(np.float32) * (1.0 - smooth_3ch)).clip(0, 255).astype(np.uint8)
+
+        # --- Skin texture perturbation for anti-biometric ---
+        hsv = cv2.cvtColor(warped, cv2.COLOR_BGR2HSV)
+        skin_mask = cv2.inRange(hsv, (0, 15, 40), (40, 255, 255))
+        skin_mask = cv2.GaussianBlur(skin_mask, (7, 7), 0)
+
+        if np.sum(skin_mask > 0) > 100:
+            noise = rng.normal(0, 4, warped.shape).astype(np.float32)
+            skin_alpha = (skin_mask.astype(np.float32) / 255.0)
+            skin_alpha_3ch = cv2.merge([skin_alpha, skin_alpha, skin_alpha])
+            warped = (warped.astype(np.float32) + noise * skin_alpha_3ch * 0.7).clip(0, 255).astype(np.uint8)
+
+        # --- Color shift on the face to further alter appearance ---
+        face_mask_in_roi = np.zeros((rh, rw), dtype=np.float32)
+        face_rx2 = max(0, x - ex)
+        face_ry2 = max(0, y - ey)
+        face_rw2 = min(rw - face_rx2, w)
+        face_rh2 = min(rh - face_ry2, h)
+        face_mask_in_roi[face_ry2:face_ry2 + face_rh2, face_rx2:face_rx2 + face_rw2] = 1.0
+        face_mask_in_roi = cv2.GaussianBlur(face_mask_in_roi, (21, 21), 0)
+
+        # Moderate hue/saturation shift
+        hue_shift = rng.uniform(-8, 8)
+        sat_scale = rng.uniform(0.8, 1.2)
+        warped_hsv = cv2.cvtColor(warped, cv2.COLOR_BGR2HSV).astype(np.float32)
+        face_3ch = cv2.merge([face_mask_in_roi, face_mask_in_roi, face_mask_in_roi])
+        shifted_hsv = warped_hsv.copy()
+        shifted_hsv[:, :, 0] = (shifted_hsv[:, :, 0] + hue_shift) % 180
+        shifted_hsv[:, :, 1] = shifted_hsv[:, :, 1] * sat_scale
+        shifted_hsv = shifted_hsv.clip([0, 0, 0], [179, 255, 255])
+        # Blend shifted version into the face region only
+        blended_hsv = (shifted_hsv * face_3ch + warped_hsv * (1.0 - face_3ch))
+        warped = cv2.cvtColor(blended_hsv.clip(0, 255).astype(np.uint8), cv2.COLOR_HSV2BGR)
+
+        # Paste warped region back into the full image
+        result = original.copy()
+        result[ey : ey + eh, ex : ex + ew] = warped
+
+        return result
+
+    @staticmethod
+    def _piecewise_affine_warp(
+        image: np.ndarray,
+        src_points: np.ndarray,
+        dst_points: np.ndarray,
+        grid_rows: int,
+        grid_cols: int,
+    ) -> np.ndarray | None:
+        """Apply piecewise affine warp using Delaunay triangulation.
+
+        Each triangle in the source grid is mapped to its corresponding
+        triangle in the destination grid via an affine transform.
+        """
+        h, w = image.shape[:2]
+        output = image.copy()
+
+        # Build triangles from the grid structure
+        triangles = []
+        for r in range(grid_rows - 1):
+            for c in range(grid_cols - 1):
+                idx_tl = r * grid_cols + c
+                idx_tr = r * grid_cols + c + 1
+                idx_bl = (r + 1) * grid_cols + c
+                idx_br = (r + 1) * grid_cols + c + 1
+                # Two triangles per grid cell
+                triangles.append((idx_tl, idx_tr, idx_bl))
+                triangles.append((idx_tr, idx_br, idx_bl))
+
+        for tri_indices in triangles:
+            i0, i1, i2 = tri_indices
+            src_tri = np.float32([src_points[i0], src_points[i1], src_points[i2]])
+            dst_tri = np.float32([dst_points[i0], dst_points[i1], dst_points[i2]])
+
+            # Bounding rects
+            sr = cv2.boundingRect(src_tri.reshape(1, -1, 2).astype(np.int32))
+            dr = cv2.boundingRect(dst_tri.reshape(1, -1, 2).astype(np.int32))
+
+            # Clip to image bounds
+            sr_x2 = min(sr[0] + sr[2], w)
+            sr_y2 = min(sr[1] + sr[3], h)
+            sr = (max(0, sr[0]), max(0, sr[1]), sr_x2 - max(0, sr[0]), sr_y2 - max(0, sr[1]))
+
+            dr_x2 = min(dr[0] + dr[2], w)
+            dr_y2 = min(dr[1] + dr[3], h)
+            dr = (max(0, dr[0]), max(0, dr[1]), dr_x2 - max(0, dr[0]), dr_y2 - max(0, dr[1]))
+
+            if sr[2] <= 0 or sr[3] <= 0 or dr[2] <= 0 or dr[3] <= 0:
+                continue
+
+            # Offset triangle coords to bounding rect origins
+            src_tri_offset = src_tri - np.float32([sr[0], sr[1]])
+            dst_tri_offset = dst_tri - np.float32([dr[0], dr[1]])
+
+            # Crop the source region
+            src_crop = image[sr[1]:sr[1] + sr[3], sr[0]:sr[0] + sr[2]]
+            if src_crop.size == 0:
+                continue
+
+            # Compute affine transform
+            try:
+                mat = cv2.getAffineTransform(src_tri_offset, dst_tri_offset)
+            except cv2.error:
+                continue
+
+            warped_tri = cv2.warpAffine(
+                src_crop, mat, (dr[2], dr[3]),
+                flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT_101,
+            )
+
+            # Create mask for the destination triangle
+            tri_mask = np.zeros((dr[3], dr[2]), dtype=np.uint8)
+            pts = dst_tri_offset.astype(np.int32).reshape((-1, 1, 2))
+            cv2.fillConvexPoly(tri_mask, pts, 255)
+
+            # Blend into output
+            dst_crop = output[dr[1]:dr[1] + dr[3], dr[0]:dr[0] + dr[2]]
+            if dst_crop.shape != warped_tri.shape:
+                continue
+            mask_3ch = cv2.merge([tri_mask, tri_mask, tri_mask]).astype(np.float32) / 255.0
+            blended = (warped_tri.astype(np.float32) * mask_3ch +
+                       dst_crop.astype(np.float32) * (1.0 - mask_3ch))
+            output[dr[1]:dr[1] + dr[3], dr[0]:dr[0] + dr[2]] = blended.clip(0, 255).astype(np.uint8)
+
+        return output
 
     # ------------------------------------------------------------------
     # 3. PII TEXT – erase original, then render synthetic at matching size
@@ -515,49 +850,127 @@ class ImageMitigator:
     # Fake text generation
     # ------------------------------------------------------------------
     def _generate_fake_text(self, entity: DetectedEntity) -> str:
-        """Generate contextually appropriate fake text for a PII entity.
+        """Generate contextually appropriate fake text for a PII entity of the exact same size.
 
         Gender-aware: uses entity.metadata['gender'] to pick male/female
         names so that male names are replaced with male names and vice versa.
-        Addresses are replaced with realistic full addresses.
         """
         label = entity.label.upper()
+        orig = entity.text or ""
+        L = len(orig)
 
-        if not self.faker:
+        if L == 0:
             return f"<{label}>"
 
-        if label == "AADHAR":
-            return f"{self.faker.random_number(4, True)} {self.faker.random_number(4, True)} {self.faker.random_number(4, True)}"
-        if label in {"PERSON", "NAME"}:
-            # Gender-aware name replacement
-            gender = entity.metadata.get("gender")
-            if gender == "male":
-                return self.faker.name_male()
-            elif gender == "female":
-                return self.faker.name_female()
-            return self.faker.name()
-        if label == "ORG":
-            return self.faker.company()
-        if label == "DOB":
-            return self.faker.date(pattern="%d/%m/%Y")
-        if label in {"ADDRESS", "GPE", "STREET_ADDRESS", "LOCATION"}:
-            # Replace address with a realistic full address
-            return self.faker.address().replace("\n", ", ")
-        if label == "LICENSE":
-            return self.faker.bothify("??## #### #######", letters="ABCDEFGHIJKLMNOPQRSTUVWXYZ")
-        if label == "NUMBERS":
-            orig_len = len(entity.text) if entity.text else 6
-            return "".join(str(np.random.randint(0, 10)) for _ in range(orig_len))
-        if label == "CARDINAL":
-            return str(self.faker.random_int(min=100, max=9999))
-        if label in {"EMAIL", "EMAIL_ADDRESS"}:
-            return self.faker.email()
-        if label in {"PHONE", "PHONE_NUMBER"}:
-            return self.faker.phone_number()
+        # Helper to preserve character casing and numeric digits
+        def format_preserve(text: str) -> str:
+            chars = []
+            for c in text:
+                if c.isupper():
+                    chars.append(np.random.choice(list("ABCDEFGHIJKLMNOPQRSTUVWXYZ")))
+                elif c.islower():
+                    chars.append(np.random.choice(list("abcdefghijklmnopqrstuvwxyz")))
+                elif c.isdigit():
+                    chars.append(np.random.choice(list("0123456789")))
+                else:
+                    chars.append(c)
+            return "".join(chars)
 
-        # Fallback: generate text matching original length
-        orig = entity.text or label
-        return self.faker.pystr(min_chars=len(orig), max_chars=len(orig) + 2)
+        if not self.faker:
+            return format_preserve(orig)
+
+        if label == "AADHAR":
+            return f"{self.faker.random_number(4, True)} {self.faker.random_number(4, True)} {self.faker.random_number(4, True)}"[:L]
+
+        if label in {"PERSON", "NAME"}:
+            gender = entity.metadata.get("gender")
+            for _ in range(50):
+                if gender == "male":
+                    candidate = self.faker.name_male()
+                elif gender == "female":
+                    candidate = self.faker.name_female()
+                else:
+                    candidate = self.faker.name()
+                
+                if orig.isupper():
+                    candidate = candidate.upper()
+                
+                if len(candidate) == L:
+                    return candidate
+            
+            # Fallback: truncate or pad
+            candidate = self.faker.name()
+            if orig.isupper():
+                candidate = candidate.upper()
+            if len(candidate) > L:
+                return candidate[:L]
+            else:
+                needed = L - len(candidate)
+                padding = "".join(np.random.choice(list("ABCDEFGHIJKLMNOPQRSTUVWXYZ")) for _ in range(needed))
+                return candidate + (padding.upper() if orig.isupper() else padding.lower())
+
+        if label == "ORG":
+            for _ in range(50):
+                candidate = self.faker.company()
+                if orig.isupper():
+                    candidate = candidate.upper()
+                if len(candidate) == L:
+                    return candidate
+            if L <= 5:
+                return "".join(np.random.choice(list("ABCDEFGHIJKLMNOPQRSTUVWXYZ")) for _ in range(L))
+            
+            candidate = self.faker.company()
+            if orig.isupper():
+                candidate = candidate.upper()
+            if len(candidate) > L:
+                return candidate[:L]
+            else:
+                return candidate.ljust(L, "A")
+
+        if label == "DOB":
+            return self.faker.date(pattern="%d/%m/%Y")[:L]
+
+        if label in {"ADDRESS", "GPE", "STREET_ADDRESS", "LOCATION"}:
+            # Alphanumeric codes or short strings detected as GPE should be format-preserved
+            has_letters = any(c.isalpha() for c in orig)
+            has_digits = any(c.isdigit() for c in orig)
+            if (has_letters and has_digits) or L < 20:
+                return format_preserve(orig)
+            
+            for _ in range(30):
+                candidate = self.faker.address().replace("\n", ", ")
+                if len(candidate) == L:
+                    return candidate
+            candidate = self.faker.address().replace("\n", ", ")
+            if len(candidate) > L:
+                return candidate[:L]
+            else:
+                return candidate.ljust(L, " ")
+
+        if label == "LICENSE":
+            return self.faker.bothify("??## #### #######", letters="ABCDEFGHIJKLMNOPQRSTUVWXYZ")[:L]
+
+        if label == "ROLL_NUMBER":
+            return format_preserve(orig)
+
+        if label in {"NUMBERS", "CARDINAL"}:
+            return "".join(str(np.random.randint(0, 10)) for _ in range(L))
+
+        if label in {"EMAIL", "EMAIL_ADDRESS"}:
+            for _ in range(30):
+                candidate = self.faker.email()
+                if len(candidate) == L:
+                    return candidate
+            return self.faker.email()[:L]
+
+        if label in {"PHONE", "PHONE_NUMBER"}:
+            for _ in range(30):
+                candidate = self.faker.phone_number()
+                if len(candidate) == L:
+                    return candidate
+            return self.faker.phone_number()[:L]
+
+        return format_preserve(orig)
 
     # ------------------------------------------------------------------
     # Color matching helper

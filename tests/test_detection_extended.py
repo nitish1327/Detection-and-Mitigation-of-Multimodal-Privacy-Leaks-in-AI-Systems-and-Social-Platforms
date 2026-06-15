@@ -28,13 +28,17 @@ def test_qr_detection(detector):
     detector._qr_detector = MagicMock()
     # Mock QR detector output: (ok, decoded_info, points, _)
     mock_points = np.array([[[10, 10], [50, 10], [50, 50], [10, 50]]], dtype=np.float32)
-    detector._qr_detector.detectAndDecodeMulti.return_value = (True, ["secret_data"], mock_points, None)
+    detector._qr_detector.detectAndDecodeMulti.side_effect = (
+        [(True, ["secret_data"], mock_points, None)] + [(False, [], None, None)] * 20
+    )
     
     entities = list(detector._detect_qr(image))
     
     assert len(entities) >= 1
     assert entities[0].label == "qr_code"
     assert entities[0].text == "secret_data"
+    assert entities[0].bbox.x == 5
+    assert entities[0].bbox.width == 50
 
 def test_mrz_detection(detector):
     # Mock OCR results: List[Tuple[points, text, confidence]]

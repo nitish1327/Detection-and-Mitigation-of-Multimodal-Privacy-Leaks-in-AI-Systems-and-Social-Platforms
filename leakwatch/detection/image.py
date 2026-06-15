@@ -288,6 +288,42 @@ class ImageDetector:
                     bbox=self._bbox_from_points(bbox_points),
                     mitigation="blur",
                 )
+        
+
+    def _detect_layout(
+        self,
+        image: np.ndarray,
+        ocr_results: List[Tuple[Sequence[Tuple[float, float]], str, float]]
+    ) -> Iterable[DetectedEntity]:
+        """Detect layout blocks by grouping text regions."""
+        if not ocr_results:
+            return
+        
+        all_xs = []
+        all_ys = []
+        for bbox_points, _, _ in ocr_results:
+            for p in bbox_points:
+                all_xs.append(p[0])
+                all_ys.append(p[1])
+                
+        if not all_xs or not all_ys:
+            return
+            
+        x_min, x_max = min(all_xs), max(all_xs)
+        y_min, y_max = min(all_ys), max(all_ys)
+        
+        yield DetectedEntity(
+            modality=Modality.IMAGE,
+            label="layout_block",
+            confidence=0.9,
+            bbox=BoundingBox(
+                x=int(x_min),
+                y=int(y_min),
+                width=int(x_max - x_min),
+                height=int(y_max - y_min),
+            ),
+            mitigation="blur",
+        )
 
 
     @staticmethod
