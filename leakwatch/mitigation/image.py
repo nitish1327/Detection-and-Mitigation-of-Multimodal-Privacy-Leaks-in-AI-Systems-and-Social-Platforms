@@ -306,8 +306,7 @@ class ImageMitigator:
             return image, "[BLURRED_FACE]", None
 
         # ------- Expand the replacement region to cover the full ID photo area -------
-        # ID photos typically show head+shoulders, so expand down and slightly wider
-        # than just the detected face bbox
+        # Heavier blur fallback if asset is missing or out of bounds
         photo_x = max(0, x - int(w * 0.5))
         photo_y = max(0, y - int(h * 0.3))
         photo_w = min(img_w - photo_x, int(w * 2.0))
@@ -320,7 +319,7 @@ class ImageMitigator:
             photo_x, photo_y, photo_w, photo_h = x, y, w, h
 
         # ------- Resize full asset to fill the photo region -------
-        # Use the full asset (head + shoulders) for a natural ID photo look
+        # Heavier blur fallback if asset is missing
         ah, aw = asset.shape[:2]
         # Crop top portion of asset (head and upper shoulders, skip bottom)
         crop_top = int(ah * 0.02)
@@ -606,3 +605,4 @@ class ImageMitigator:
 
     def _redact_region(self, roi: np.ndarray) -> np.ndarray:
         return np.full_like(roi, 50)
+

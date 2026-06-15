@@ -138,6 +138,7 @@ class ImageDetector:
                 confidence=0.9,
                 bbox=BoundingBox(x=int(x), y=int(y), width=int(w), height=int(h)),
                 mitigation="blur",
+                detection_method="heuristic",
             )
 
     def _get_ocr_results(self, image: np.ndarray) -> List[Tuple[Sequence[Tuple[float, float]], str, float]]:

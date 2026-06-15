@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from ..adapters import AudioAdapter, VideoAdapter
@@ -9,7 +10,7 @@ from ..detection import ImageDetector, TextDetector
 from ..explainability.audit import record_audit
 from ..explainability.image import render_image_overlay
 from ..explainability.text import render_text_spans
-from ..mitigation import ImageMitigator, TextMitigator
+from ..mitigation import AudioMitigator, ImageMitigator, TextMitigator
 from ..utils.config import LeakWatchConfig, get_config
 from ..utils.logging import ensure_dir, get_logger
 from ..utils.types import DetectedEntity, DetectionResult, Modality
@@ -17,6 +18,7 @@ from ..utils.types import DetectedEntity, DetectionResult, Modality
 LOGGER = get_logger(__name__)
 TEXT_EXTENSIONS = {".txt", ".md", ".json"}
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp"}
+AUDIO_EXTENSIONS = {".wav"}
 
 
 class PipelineManager:
@@ -28,7 +30,13 @@ class PipelineManager:
         self.text_mitigator = TextMitigator(self.config.text)
         self.image_detector = ImageDetector(self.config.image, text_detector=self.text_detector)
         self.image_mitigator = ImageMitigator(self.config.image)
-        self.audio_adapter = AudioAdapter()
+        self.audio_adapter = AudioAdapter(
+            transcript_extension=self.config.audio.transcript_extension,
+            enable_transcription=self.config.audio.enable_transcription,
+            transcription_backend=self.config.audio.transcription_backend,
+            whisper_model=self.config.audio.whisper_model,
+        )
+        self.audio_mitigator = AudioMitigator(self.config.audio)
         self.video_adapter = VideoAdapter()
 
     # --- Text Modality -------------------------------------------------
@@ -50,17 +58,59 @@ class PipelineManager:
         source_path = Path(path)
         LOGGER.info("Processing audio: %s", source_path.name)
         transcript = self.audio_adapter.to_text(source_path)
+
+        detected_entities = self._stamp_entity_ids(self.text_detector.detect(transcript))
+        sanitized_text, mitigated_entities = self.text_mitigator.mitigate(transcript, detected_entities)
+
         transcript_path = self._output_path(source_path, suffix=".transcript.txt")
         ensure_dir(transcript_path)
         transcript_path.write_text(transcript, encoding="utf-8")
-        result = self._process_text_payload(
+
+        sanitized_text_path = self._output_path(source_path, suffix=".audio.sanitized.txt")
+        ensure_dir(sanitized_text_path)
+        sanitized_text_path.write_text(sanitized_text, encoding="utf-8")
+
+        beeped_audio_path = self._output_path(source_path, suffix=".sanitized.wav")
+        ensure_dir(beeped_audio_path)
+        beeped_audio_path, beep_ranges = self.audio_mitigator.mitigate(
             source_path,
             transcript,
-            suffix=".audio.sanitized.txt",
-            modality=Modality.AUDIO,
+            detected_entities,
+            beeped_audio_path,
         )
-        result.artifacts.append(transcript_path)
+
+        artifacts: list[Path] = [transcript_path, sanitized_text_path]
+        if self.config.explainability.save_text_spans and mitigated_entities:
+            span_path = sanitized_text_path.with_suffix(".spans.txt")
+            artifacts.append(render_text_spans(sanitized_text, mitigated_entities, span_path))
+
+        beep_map_path = self._output_path(source_path, suffix=".audio.beeps.json")
+        ensure_dir(beep_map_path)
+        beep_map_path.write_text(json.dumps(beep_ranges, indent=2), encoding="utf-8")
+        artifacts.append(beep_map_path)
+
+        result = DetectionResult(
+            source_path=source_path,
+            modality=Modality.AUDIO,
+            entities=mitigated_entities,
+            mitigated_output=beeped_audio_path,
+            artifacts=artifacts,
+            runtime_metadata={
+                "ffmpeg_fallback": self.audio_mitigator.last_ffmpeg_fallback,
+                "detection_mode": self.text_detector.detection_mode,
+            },
+        )
+        self._attach_audit(result)
         return result
+
+    def _stamp_entity_ids(self, entities: list[DetectedEntity]) -> list[DetectedEntity]:
+        stamped: list[DetectedEntity] = []
+        for index, entity in enumerate(entities):
+            start = entity.span.start if entity.span else -1
+            end = entity.span.end if entity.span else -1
+            token = f"{index}:{entity.label}:{start}:{end}:{entity.text or ''}"
+            stamped.append(entity.model_copy(update={"entity_id": token}))
+        return stamped
 
     # --- Image Modality -----------------------------------------------
     def process_image(self, path: Path, output_path: Path | None = None) -> DetectionResult:
@@ -81,6 +131,7 @@ class PipelineManager:
             entities=mitigated_entities,
             mitigated_output=mitigated_path,
             artifacts=artifacts,
+            runtime_metadata={"detection_mode": self.text_detector.detection_mode},
         )
         self._attach_audit(result)
         return result
@@ -116,6 +167,7 @@ class PipelineManager:
             entities=aggregated_entities,
             mitigated_output=manifest_path,
             artifacts=artifacts,
+            runtime_metadata={"detection_mode": self.text_detector.detection_mode},
         )
         self._attach_audit(result)
         return result
@@ -140,6 +192,11 @@ class PipelineManager:
                     results.append(self.process_image(path))
                 except FileNotFoundError:
                     LOGGER.warning("Skipping unreadable image: %s", path)
+            elif suffix in AUDIO_EXTENSIONS:
+                try:
+                    results.append(self.process_audio(path))
+                except RuntimeError as exc:
+                    LOGGER.warning("Skipping audio %s: %s", path, exc)
         return results
 
     def _attach_audit(self, result: DetectionResult) -> None:
@@ -171,6 +228,7 @@ class PipelineManager:
             entities=mitigated_entities,
             mitigated_output=output_path,
             artifacts=artifacts,
+            runtime_metadata={"detection_mode": self.text_detector.detection_mode},
         )
         self._attach_audit(result)
         return result

@@ -1,0 +1,26 @@
+[
+  {
+    "label": "PERSON",
+    "start_sec": 2.997722972972973,
+    "end_sec": 4.537391891891892,
+    "entity_indexes": [
+      0
+    ],
+    "entity_ids": [
+      "0:PERSON:29:42:Devriyaprabha"
+    ],
+    "ffmpeg_fallback": false
+  },
+  {
+    "label": "phone",
+    "start_sec": 6.606087837837838,
+    "end_sec": 7.827371621621622,
+    "entity_indexes": [
+      1
+    ],
+    "entity_ids": [
+      "1:phone:63:73:8123456789"
+    ],
+    "ffmpeg_fallback": false
+  }
+]

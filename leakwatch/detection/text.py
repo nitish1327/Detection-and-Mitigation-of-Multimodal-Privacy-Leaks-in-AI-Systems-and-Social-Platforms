@@ -14,7 +14,10 @@ except ImportError:  # pragma: no cover
     Language = None  # type: ignore
 
 from ..utils.config import TextConfig
+from ..utils.logging import get_logger
 from ..utils.types import DetectedEntity, Modality, Span
+
+LOGGER = get_logger(__name__)
 
 
 @dataclass
@@ -30,15 +33,31 @@ class TextDetector:
     def __init__(self, config: TextConfig, model: str = "en_core_web_sm") -> None:
         self.config = config
         self._nlp: Language | None = None
+        self._nlp_configured = bool(config.enable_spacy)
+        self._nlp_loaded = False
+        self._nlp_failed = False
         self._patterns = [
             _RegexPattern(item.name, re.compile(item.pattern, re.IGNORECASE), item.action)
             for item in config.regex_entities
         ]
-        if config.enable_spacy and spacy is not None:
-            try:
-                self._nlp = spacy.load(model)
-            except OSError:
-                self._nlp = None
+        if self._nlp_configured:
+            if spacy is None:
+                self._nlp_failed = True
+                LOGGER.warning(
+                    "[LeakWatch] NLP configured but spaCy is unavailable; falling back to regex-only detection."
+                )
+            else:
+                try:
+                    self._nlp = spacy.load(model)
+                    self._nlp_loaded = self._nlp is not None
+                except (ImportError, OSError, Exception) as exc:  # noqa: BLE001
+                    self._nlp_failed = True
+                    self._nlp = None
+                    LOGGER.warning(
+                        "[LeakWatch] NLP configured but failed to load model '%s' (%s); falling back to regex-only detection.",
+                        model,
+                        exc,
+                    )
 
         # Document field labels that are structural text, NOT PII values
         self._field_labels = {
@@ -69,6 +88,30 @@ class TextDetector:
             "class of vehicle", "cov", "type of vehicle",
             "transport", "non-transport", "non transport",
         }
+
+        LOGGER.info("[LeakWatch] Detection mode: %s", self._startup_mode_label())
+
+    @property
+    def detection_mode(self) -> str:
+        """Return audit-friendly detection mode."""
+        regex_active = bool(self._patterns)
+        nlp_active = self._nlp_loaded
+        if self._nlp_configured and self._nlp_failed:
+            return "regex_fallback"
+        if regex_active and nlp_active:
+            return "hybrid"
+        if nlp_active:
+            return "nlp"
+        return "regex"
+
+    def _startup_mode_label(self) -> str:
+        if self.detection_mode == "hybrid":
+            return "hybrid (regex + NLP)"
+        if self.detection_mode == "nlp":
+            return "nlp_only"
+        if self.detection_mode == "regex_fallback":
+            return "regex_fallback"
+        return "regex_only"
 
     def _is_field_label(self, text: str) -> bool:
         """Return True if the text is a document field label, not a PII value."""
@@ -128,6 +171,7 @@ class TextDetector:
                         confidence=0.8,
                         text=ent.text,
                         span=Span(start=ent.start_char, end=ent.end_char),
+                        detection_method="nlp",
                     )
                 )
         return results
@@ -144,6 +188,7 @@ class TextDetector:
                         text=match.group(0),
                         span=Span(start=match.start(), end=match.end()),
                         mitigation=pattern.action,  # pre-select desired action
+                        detection_method="regex",
                     )
                 )
         return results

@@ -20,7 +20,7 @@ def test_padding_application(sample_image):
     
     entity = DetectedEntity(
         modality=Modality.IMAGE,
-        label="person",
+        label="face",
         confidence=1.0,
         bbox=BoundingBox(x=40, y=40, width=20, height=20)
     )
