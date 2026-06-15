@@ -1,0 +1,8 @@
+Detected sensitive spans:
+
+- PERSON | mitigation=mask | span=(29, 44)
+  original : Devriyaprabha
+  sanitized: Natasha Carroll
+- phone | mitigation=mask | span=(63, 85)
+  original : 8123456789
+  sanitized: s 001-612-786-9380x317

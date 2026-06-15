@@ -1,0 +1,65 @@
+{
+  "timestamp": "2026-04-22T04:05:00.729004+00:00",
+  "modality": "audio",
+  "detection_mode": "hybrid",
+  "source": "C:\\Capstone_pranav_branch\\Capstone_pranav_branch\\samples\\audio\\Divya_mam.ogg",
+  "output": "artifacts\\Divya_mam.sanitized.wav",
+  "artifacts": [
+    "artifacts\\Divya_mam.transcript.txt",
+    "artifacts\\Divya_mam.audio.sanitized.txt",
+    "artifacts\\Divya_mam.audio.sanitized.spans.txt",
+    "artifacts\\Divya_mam.audio.beeps.json"
+  ],
+  "entity_count": 2,
+  "ffmpeg_fallback": false,
+  "spans": [
+    {
+      "span_text": "Devriyaprabha",
+      "entity_type": "PERSON",
+      "detection_method": "nlp",
+      "mitigation_applied": "mask",
+      "confidence": 0.8,
+      "timeline_window": [
+        2997,
+        4537
+      ]
+    },
+    {
+      "span_text": "8123456789",
+      "entity_type": "phone",
+      "detection_method": "regex",
+      "mitigation_applied": "mask",
+      "confidence": null,
+      "timeline_window": [
+        6606,
+        7827
+      ]
+    }
+  ],
+  "entities": [
+    {
+      "label": "PERSON",
+      "confidence": 0.8,
+      "text": "Natasha Carroll",
+      "span": {
+        "start": 29,
+        "end": 44
+      },
+      "bbox": null,
+      "mitigation": "mask",
+      "detection_method": "nlp"
+    },
+    {
+      "label": "phone",
+      "confidence": 0.95,
+      "text": "001-612-786-9380x31787",
+      "span": {
+        "start": 63,
+        "end": 85
+      },
+      "bbox": null,
+      "mitigation": "mask",
+      "detection_method": "regex"
+    }
+  ]
+}

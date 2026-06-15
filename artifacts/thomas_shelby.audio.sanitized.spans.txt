@@ -4,5 +4,5 @@ Detected sensitive spans:
   original : Thomas Shelby
   sanitized: Lauren Martinez
 - ORG | mitigation=mask | span=(64, 89)
-  original : Derby Die
+  original : Derby Day
   sanitized: s Bailey, Tyler and Schul

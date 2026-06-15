@@ -1,0 +1,38 @@
+[
+  {
+    "label": "PERSON",
+    "start_sec": 0.8916952380952383,
+    "end_sec": 2.266314285714286,
+    "entity_indexes": [
+      0
+    ],
+    "entity_ids": [
+      "0:PERSON:8:18:Ganyananya"
+    ],
+    "ffmpeg_fallback": false
+  },
+  {
+    "label": "phone",
+    "start_sec": 5.021400000000001,
+    "end_sec": 6.396019047619048,
+    "entity_indexes": [
+      2
+    ],
+    "entity_ids": [
+      "2:phone:42:52:7676696644"
+    ],
+    "ffmpeg_fallback": false
+  },
+  {
+    "label": "ORG",
+    "start_sec": 11.580342857142858,
+    "end_sec": 12.7535,
+    "entity_indexes": [
+      1
+    ],
+    "entity_ids": [
+      "1:ORG:96:105:Gmail.com"
+    ],
+    "ffmpeg_fallback": false
+  }
+]

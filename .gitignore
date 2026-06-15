@@ -8,8 +8,9 @@ build/
 *.egg-info/
 ffmpeg.exe
 scratch/
-artifacts/*.json
-artifacts/*.wav
-artifacts/*.png
-artifacts/*.txt
-!artifacts/placeholder.txt
+# artifacts/ is now allowed for demo purposes
+# samples/ is allowed
+!artifacts/*.wav
+!artifacts/*.txt
+!artifacts/*.json
+!samples/audio/*.mp4
