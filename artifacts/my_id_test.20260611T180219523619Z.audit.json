@@ -1,0 +1,15 @@
+{
+  "timestamp": "2026-06-11T18:02:19.523619+00:00",
+  "modality": "video",
+  "detection_mode": "regex_fallback",
+  "source": "D:\\CAPSTONE_2\\-Detection-and-Mitigation-of-Multimodal-Privacy-Leaks-in-AI-Systems-and-Social-Platforms\\samples\\video\\my_id_test.mp4",
+  "output": null,
+  "artifacts": [],
+  "entity_count": 0,
+  "ffmpeg_fallback": false,
+  "multi_speaker_detected": false,
+  "redaction_confidence": "normal",
+  "failure_reason": "Unable to load image: artifacts\\my_id_test_frames\\my_id_test_frame_00048.png",
+  "spans": [],
+  "entities": []
+}

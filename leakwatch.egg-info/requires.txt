@@ -7,6 +7,11 @@ opencv-python>=4.9
 easyocr>=1.7
 pillow>=10.2
 numpy>=1.26
+fastapi>=0.109
+uvicorn>=0.25
+
+[audio]
+openai-whisper>=20240930
 
 [dev]
 pytest>=8.2

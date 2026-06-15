@@ -14,6 +14,7 @@ except ImportError:  # pragma: no cover
     easyocr = None
 
 from ..utils.config import ImageConfig
+from ..utils.logging import get_logger
 from ..utils.types import BoundingBox, DetectedEntity, Modality
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -23,6 +24,9 @@ if easyocr:
     EasyOcrReader = easyocr.Reader
 else:  # pragma: no cover
     EasyOcrReader = None  # type: ignore
+
+
+LOGGER = get_logger(__name__)
 
 
 class ImageDetector:
@@ -69,7 +73,20 @@ class ImageDetector:
         if not self.config.enable_ocr or EasyOcrReader is None:
             return []
         if self._ocr_reader is None:
-            self._ocr_reader = EasyOcrReader(list(self.config.text_detection_langs), gpu=False)
+            try:
+                self._ocr_reader = EasyOcrReader(
+                    list(self.config.text_detection_langs),
+                    gpu=bool(self.config.ocr_use_gpu),
+                )
+            except Exception as exc:  # noqa: BLE001
+                if self.config.ocr_use_gpu:
+                    LOGGER.warning(
+                        "EasyOCR GPU initialization failed (%s); retrying on CPU.",
+                        exc,
+                    )
+                    self._ocr_reader = EasyOcrReader(list(self.config.text_detection_langs), gpu=False)
+                else:
+                    raise
 
         rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         detections = self._ocr_reader.readtext(rgb_image)

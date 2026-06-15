@@ -1,0 +1,45 @@
+{
+  "timestamp": "2026-04-22T04:04:42.279483+00:00",
+  "modality": "audio",
+  "detection_mode": "regex_fallback",
+  "source": "D:\\CAPSTONE_2\\-Detection-and-Mitigation-of-Multimodal-Privacy-Leaks-in-AI-Systems-and-Social-Platforms\\WhatsApp Ptt 2026-04-22 at 9.31.06 AM.ogg",
+  "output": "artifacts\\WhatsApp Ptt 2026-04-22 at 9.31.06 AM.sanitized.wav",
+  "artifacts": [
+    "artifacts\\WhatsApp Ptt 2026-04-22 at 9.31.06 AM.transcript.txt",
+    "artifacts\\WhatsApp Ptt 2026-04-22 at 9.31.06 AM.audio.sanitized.txt",
+    "artifacts\\WhatsApp Ptt 2026-04-22 at 9.31.06 AM.audio.sanitized.spans.txt",
+    "artifacts\\WhatsApp Ptt 2026-04-22 at 9.31.06 AM.audio.beeps.json"
+  ],
+  "entity_count": 1,
+  "ffmpeg_fallback": false,
+  "multi_speaker_detected": true,
+  "redaction_confidence": "reduced",
+  "failure_reason": null,
+  "spans": [
+    {
+      "span_text": "8123456789",
+      "entity_type": "phone",
+      "detection_method": "regex",
+      "mitigation_applied": "mask",
+      "confidence": null,
+      "timeline_window": [
+        6606,
+        7827
+      ]
+    }
+  ],
+  "entities": [
+    {
+      "label": "phone",
+      "confidence": 0.95,
+      "text": "[REDACTED:PHONE]",
+      "span": {
+        "start": 63,
+        "end": 79
+      },
+      "bbox": null,
+      "mitigation": "mask",
+      "detection_method": "regex"
+    }
+  ]
+}
