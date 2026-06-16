@@ -17,11 +17,14 @@ text:
     - name: "credit_card"
       pattern: "\\b(?:\\d[ -]*?){13,16}\\b"
       action: "mask"
+    - name: "id_number"
+      pattern: "[A-Z]{2,}\\d{1,2}[A-Z]*\\d{2,}"
+      action: "mask"
 image:
-  face_blur_kernel: 35
+  face_blur_kernel: 45
   text_detection_langs:
     - "en"
-  min_confidence: 0.3
+  min_confidence: 0.2
   enable_ocr: true
   ocr_use_gpu: true
 explainability:
@@ -43,4 +46,4 @@ video:
   enabled: true
   redaction_mode: "per_frame"
   carryover_frames: 30
-  frame_stride: 1
+  frame_stride: 5

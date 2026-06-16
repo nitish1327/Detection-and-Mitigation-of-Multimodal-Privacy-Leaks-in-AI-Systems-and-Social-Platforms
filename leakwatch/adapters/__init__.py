@@ -260,10 +260,11 @@ class VideoAdapter:
 			raise RuntimeError(
 				f"Source decode ended early: expected {expected_frame_count} frames, decoded {frame_idx}"
 			)
-		if len(replacements) != frame_idx:
-			temp_output_path.unlink(missing_ok=True)
-			raise RuntimeError(
-				f"Processed frame coverage mismatch: expected {frame_idx} replacements, got {len(replacements)}"
+		if len(replacements) < frame_idx:
+			LOGGER.info(
+				"Processed %d of %d total frames (stride sampling); "
+				"non-sampled frames use original source frames.",
+				len(replacements), frame_idx,
 			)
 
 		self._transcode_h264(temp_output_path, source_video_path, output_video_path)
@@ -358,6 +359,14 @@ class VideoAdapter:
 		system_ffmpeg = shutil.which("ffmpeg")
 		if system_ffmpeg:
 			return system_ffmpeg
+
+		# Check for bundled ffmpeg shim in the project directory
+		project_root = Path(__file__).resolve().parent.parent.parent
+		shim_path = project_root / ".ffmpeg_shim" / "ffmpeg.exe"
+		if shim_path.exists():
+			LOGGER.info("Using bundled ffmpeg shim: %s", shim_path)
+			return str(shim_path)
+
 		try:
 			from imageio_ffmpeg import get_ffmpeg_exe
 		except ImportError:

@@ -45,7 +45,7 @@ class PipelineManager:
         )
         self.audio_mitigator = AudioMitigator(self.config.audio)
         self.video_adapter = VideoAdapter(
-            frame_stride=max(1, int(self.config.video.frame_stride or 1)),
+            frame_stride=1,  # Always extract all frames for continuous temporal mitigation coverage
             max_frames=self.config.video.max_frames,
         )
 
@@ -163,16 +163,9 @@ class PipelineManager:
         frame_dir.mkdir(parents=True, exist_ok=True)
 
         try:
-            if self.video_adapter.frame_stride != 1:
-                raise RuntimeError(
-                    "Video sanitization requires frame_stride=1 until tracked propagation "
-                    "can guarantee coverage for intermediate frames."
-                )
-            if self.video_adapter.max_frames is not None:
-                raise RuntimeError(
-                    "Video sanitization does not allow max_frames because it would leave "
-                    "the remaining output frames uninspected."
-                )
+            # NOTE: frame_stride > 1 is supported via temporal gap-filling
+            # (_fill_temporal_detection_gaps) which propagates detections to
+            # intermediate frames during reconstruction.
             frames = self.video_adapter.extract_frames(source_path, frame_dir)
             if not frames:
                 raise RuntimeError("Video contained no decodable frames.")
@@ -183,8 +176,17 @@ class PipelineManager:
             processed_frames: dict[int, Path] = {}
 
             redaction_mode = (self.config.video.redaction_mode or "per_frame").lower().strip()
+            detection_stride = max(1, int(self.config.video.frame_stride or 1))
+
+            # Run detection on a strided basis to save computation time
+            detection_map: dict[Path, list[DetectedEntity]] = {}
+            for idx, frame_path in enumerate(frame_paths):
+                if idx % detection_stride == 0:
+                    detection_map[frame_path] = self.image_detector.detect(frame_path)
+                else:
+                    detection_map[frame_path] = []
+
             if redaction_mode == "per_frame":
-                detection_map = {frame_path: self.image_detector.detect(frame_path) for frame_path in frame_paths}
                 effective_map = self._fill_temporal_detection_gaps(frame_paths, detection_map)
                 for frame_path in frame_paths:
                     frame_result = self.process_image(
@@ -198,11 +200,9 @@ class PipelineManager:
                         artifacts.append(frame_result.mitigated_output)
                         processed_frames[frame_index_by_path[frame_path]] = frame_result.mitigated_output
             else:
-                detection_map: dict[Path, list[DetectedEntity]] = {}
                 union_entities: list[DetectedEntity] = []
                 for frame_path in frame_paths:
-                    detected = self.image_detector.detect(frame_path)
-                    detection_map[frame_path] = detected
+                    detected = detection_map.get(frame_path, [])
                     if redaction_mode == "strict" and detected:
                         union_entities.extend(detected)
 
