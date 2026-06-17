@@ -29,6 +29,7 @@ class BoundingBox(BaseModel):
 
 
 class DetectedEntity(BaseModel):
+    entity_id: str | None = None
     modality: Modality
     label: str
     confidence: float
@@ -37,6 +38,7 @@ class DetectedEntity(BaseModel):
     bbox: BoundingBox | None = None
     mitigation: Literal["mask", "blur", "replace", "none"] = "none"
     explanation: str | None = None
+    detection_method: Literal["regex", "nlp", "heuristic", "unknown"] = "unknown"
 
 
 class DetectionResult(BaseModel):
@@ -46,6 +48,7 @@ class DetectionResult(BaseModel):
     mitigated_output: Path | None = None
     audit_log: Path | None = None
     artifacts: list[Path] = Field(default_factory=list)
+    runtime_metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class GraphNode(BaseModel):

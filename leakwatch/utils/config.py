@@ -33,6 +33,7 @@ class ImageConfig(BaseModel):
     text_detection_langs: list[str] = Field(default_factory=lambda: ["en"])
     min_confidence: float = 0.3
     enable_ocr: bool = True
+    ocr_use_gpu: bool = False
 
     @field_validator("face_blur_kernel")
     @classmethod
@@ -46,10 +47,32 @@ class ExplainabilityConfig(BaseModel):
     save_text_spans: bool = True
     save_image_overlays: bool = True
     audit_log_path: Path = Path("artifacts/audit.log")
+    audit_span_text_policy: str = "plain"  # options: plain, hash
 
 
 class ModalityToggle(BaseModel):
     enabled: bool = False
+
+
+class VideoConfig(ModalityToggle):
+    redaction_mode: str = "per_frame"  # options: per_frame, carryover, strict
+    carryover_frames: int = 10
+    frame_stride: int = 1
+    max_frames: int | None = None
+
+
+class AudioConfig(ModalityToggle):
+    transcript_extension: str = ".txt"
+    enable_transcription: bool = True
+    transcription_backend: str = "whisper"
+    whisper_model: str = "base"
+    ffmpeg_binary: str = "ffmpeg"
+    beep_frequency_hz: float = 1000.0
+    beep_amplitude: float = 0.85
+    min_beep_ms: int = 120
+    padding_ms: int = 150
+    merge_gap_ms: int = 300
+    mapping_confidence_threshold: float = 0.5
 
 
 class AppConfig(BaseModel):
@@ -62,8 +85,8 @@ class LeakWatchConfig(BaseModel):
     text: TextConfig = Field(default_factory=TextConfig)
     image: ImageConfig = Field(default_factory=ImageConfig)
     explainability: ExplainabilityConfig = Field(default_factory=ExplainabilityConfig)
-    audio: ModalityToggle = Field(default_factory=ModalityToggle)
-    video: ModalityToggle = Field(default_factory=ModalityToggle)
+    audio: AudioConfig = Field(default_factory=AudioConfig)
+    video: VideoConfig = Field(default_factory=VideoConfig)
 
     @classmethod
     def from_mapping(cls, data: dict[str, Any]) -> "LeakWatchConfig":

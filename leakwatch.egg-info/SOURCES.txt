@@ -17,6 +17,7 @@ leakwatch/explainability/audit.py
 leakwatch/explainability/image.py
 leakwatch/explainability/text.py
 leakwatch/mitigation/__init__.py
+leakwatch/mitigation/audio.py
 leakwatch/mitigation/image.py
 leakwatch/mitigation/text.py
 leakwatch/orchestration/__init__.py
@@ -25,4 +26,6 @@ leakwatch/utils/__init__.py
 leakwatch/utils/config.py
 leakwatch/utils/logging.py
 leakwatch/utils/types.py
+tests/test_audio_pipeline.py
 tests/test_text_pipeline.py
+tests/test_video_pipeline.py

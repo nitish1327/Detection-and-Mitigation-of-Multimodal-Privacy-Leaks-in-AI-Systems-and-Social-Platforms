@@ -17,17 +17,33 @@ text:
     - name: "credit_card"
       pattern: "\\b(?:\\d[ -]*?){13,16}\\b"
       action: "mask"
+    - name: "id_number"
+      pattern: "[A-Z]{2,}\\d{1,2}[A-Z]*\\d{2,}"
+      action: "mask"
 image:
-  face_blur_kernel: 35
+  face_blur_kernel: 45
   text_detection_langs:
     - "en"
-  min_confidence: 0.3
+  min_confidence: 0.2
   enable_ocr: true
+  ocr_use_gpu: true
 explainability:
   save_text_spans: true
-  save_image_overlays: true
+  save_image_overlays: false
   audit_log_path: "artifacts/audit.log"
 audio:
   enabled: true
+  enable_transcription: true
+  transcription_backend: "whisper"
+  whisper_model: "base"
+  ffmpeg_binary: "ffmpeg"
+  transcript_extension: ".txt"
+  beep_frequency_hz: 1000.0
+  beep_amplitude: 0.85
+  min_beep_ms: 120
+  padding_ms: 80
 video:
   enabled: true
+  redaction_mode: "per_frame"
+  carryover_frames: 30
+  frame_stride: 5
