@@ -220,13 +220,14 @@ class ImageMitigator:
             if roi_original.size == 0:
                 continue
 
-            style = self.config.default_style
-            if entity.label in {"qr_code", "aadhar", "mrz_zone"} and style != "synthetic":
+            style = entity.mitigation if entity.mitigation != "none" else self.config.default_style
+            if entity.label in {"qr_code", "aadhar", "mrz_zone"} and style not in {"synthetic", "replace"}:
                 style = "aggressive_blur"
 
             mitigated_text = entity.text
+            mapped_style = "synthetic" if style == "replace" else style
 
-            if style == "synthetic":
+            if mapped_style == "synthetic":
                 if entity.label == "face":
                     # Skip face replacement for tiny faces (watermarks, ghost images)
                     if w < 60 or h < 60:
@@ -243,13 +244,13 @@ class ImageMitigator:
                     # Use roi_current so previous erasures are visible (no double text)
                     roi_result, mitigated_text = self._replace_pii_text(roi_current, entity)
                     image[y : y + h, x : x + w] = roi_result
-            elif style == "aggressive_blur":
+            elif mapped_style == "aggressive_blur":
                 image[y : y + h, x : x + w] = self._blur_qr(roi_original) if entity.label == "qr_code" else self._aggressive_blur(roi_original)
                 mitigated_text = "[AGGRESSIVE_BLUR]"
-            elif style == "pixelate":
+            elif mapped_style == "pixelate":
                 image[y : y + h, x : x + w] = self._pixelate_region(roi_original)
                 mitigated_text = "[PIXELATED]"
-            elif style == "redact":
+            elif mapped_style == "redact":
                 image[y : y + h, x : x + w] = self._redact_region(roi_original)
                 mitigated_text = "[REDACTED]"
             else:
@@ -265,43 +266,6 @@ class ImageMitigator:
                     }
                 )
             )
-            x, y, w, h = (
-                int(entity.bbox.x),
-                int(entity.bbox.y),
-                int(entity.bbox.width),
-                int(entity.bbox.height),
-            )
-
-            # Clamp to image boundaries
-            img_h, img_w = image.shape[:2]
-            x = max(0, x)
-            y = max(0, y)
-            w = min(w, img_w - x)
-            h = min(h, img_h - y)
-
-            roi = image[y : y + h, x : x + w]
-            if roi.size == 0:
-                continue
-
-            # Determine blur strategy based on entity type
-            if entity.label.lower() == "document_card":
-                # Strong blur for the entire card region
-                image[y : y + h, x : x + w] = self._heavy_blur_region(roi)
-                action = "blur"
-            elif entity.label.lower() == "face":
-                # Standard face blur
-                image[y : y + h, x : x + w] = self._blur_region(roi)
-                action = "blur"
-            elif entity.mitigation == "blur" or entity.label in BLUR_LABELS:
-                # Blur for sensitive text regions (names, IDs, etc.)
-                image[y : y + h, x : x + w] = self._text_blur_region(roi)
-                action = "blur"
-            else:
-                # Fallback: still blur for safety in privacy context
-                image[y : y + h, x : x + w] = self._blur_region(roi)
-                action = "blur"
-
-            updated_entities.append(entity.model_copy(update={"mitigation": action}))
 
         cv2.imwrite(str(output_path), image)
         return output_path, updated_entities

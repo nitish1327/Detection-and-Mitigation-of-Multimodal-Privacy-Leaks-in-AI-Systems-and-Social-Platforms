@@ -34,7 +34,7 @@ app.add_middleware(
     ],
     allow_origin_regex=r"chrome-extension://.*",
     allow_credentials=True,
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["*"],
     allow_headers=["*"],
 )
 

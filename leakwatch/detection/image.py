@@ -136,6 +136,7 @@ class ImageDetector:
             return []
 
         entities: list[DetectedEntity] = []
+        detected_gender = None
         
         # QR Detection
         if self.config.enable_qr:

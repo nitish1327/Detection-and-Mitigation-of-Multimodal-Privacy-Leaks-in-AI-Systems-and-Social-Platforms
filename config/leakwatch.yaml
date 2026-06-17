@@ -44,6 +44,9 @@ text:
       pattern: "\\b[A-Z]{3,20}(?:\\s+[A-Z\\.]+){1,5}\\b"
       action: "replace"
       case_sensitive: true
+    - name: "id_number"
+      pattern: "[A-Z]{2,}\\d{1,2}[A-Z]*\\d{2,}"
+      action: "mask"
   allowlist:
     - "TechCorp Solutions Inc."
     - "VerifiedCheck Services"
@@ -51,9 +54,6 @@ text:
     - "SecureNet Data Vault"
     - "University of Texas"
     - "the University of Texas"
-    - name: "id_number"
-      pattern: "[A-Z]{2,}\\d{1,2}[A-Z]*\\d{2,}"
-      action: "mask"
 image:
   face_blur_kernel: 45
   text_detection_langs:

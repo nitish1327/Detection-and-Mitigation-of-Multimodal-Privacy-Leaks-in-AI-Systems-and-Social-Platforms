@@ -166,6 +166,16 @@ class PipelineManager:
             # NOTE: frame_stride > 1 is supported via temporal gap-filling
             # (_fill_temporal_detection_gaps) which propagates detections to
             # intermediate frames during reconstruction.
+            if self.video_adapter.frame_stride != 1:
+                raise RuntimeError(
+                    "Video sanitization requires frame_stride=1 until tracked propagation "
+                    "can guarantee coverage for intermediate frames."
+                )
+            if self.video_adapter.max_frames is not None:
+                raise RuntimeError(
+                    "Video sanitization does not allow max_frames because it would leave "
+                    "the remaining output frames uninspected."
+                )
             frames = self.video_adapter.extract_frames(source_path, frame_dir)
             if not frames:
                 raise RuntimeError("Video contained no decodable frames.")
