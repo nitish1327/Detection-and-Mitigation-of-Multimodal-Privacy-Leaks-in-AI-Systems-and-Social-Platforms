@@ -325,3 +325,57 @@ def test_ffmpeg_fallback_is_used_when_system_binary_fails(
     assert result.audit_log is not None
     payload = json.loads(result.audit_log.read_text(encoding="utf-8"))
     assert payload["ffmpeg_fallback"] is True
+
+
+def test_multi_speaker_rapid_alternation_flags_reduced_confidence(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    audio_path = tmp_path / "two_speaker.wav"
+    _write_sine_wave(audio_path, seconds=2.0)
+
+    mock_whisper_payload = {
+        "text": "alpha bravo charlie delta echo foxtrot",
+        "segments": [
+            {
+                "no_speech_prob": 0.1,
+                "words": [
+                    {"start": 0.00, "end": 0.20, "word": "alpha"},
+                    {"start": 0.21, "end": 0.38, "word": "bravo"},
+                    {"start": 0.39, "end": 0.56, "word": "charlie"},
+                    {"start": 0.57, "end": 0.74, "word": "delta"},
+                    {"start": 0.75, "end": 0.92, "word": "echo"},
+                    {"start": 0.93, "end": 1.10, "word": "foxtrot"},
+                ],
+            }
+        ],
+    }
+
+    config = LeakWatchConfig(
+        app=AppConfig(output_dir=tmp_path / "artifacts"),
+        text=TextConfig(
+            enable_spacy=False,
+            regex_entities=[
+                RegexEntityConfig(name="rapid_token", pattern=r"alpha|bravo|charlie", action="mask"),
+            ],
+        ),
+        image=ImageConfig(enable_ocr=False),
+        explainability=ExplainabilityConfig(
+            save_text_spans=True,
+            save_image_overlays=False,
+            audit_log_path=tmp_path / "audit.log",
+        ),
+        audio=AudioConfig(enabled=True, enable_transcription=True),
+    )
+
+    manager = PipelineManager(config)
+    manager.audio_adapter._transcriber = lambda _: mock_whisper_payload
+
+    caplog.set_level("WARNING")
+    result = manager.process_audio(audio_path)
+
+    assert result.mitigated_output is not None
+    assert result.mitigated_output.exists()
+    assert "Multi-speaker overlap likely detected" in caplog.text
+
+    assert result.audit_log is not None
+    audit_payload = json.loads(result.audit_log.read_text(encoding="utf-8"))
+    assert audit_payload["multi_speaker_detected"] is True
+    assert audit_payload["redaction_confidence"] == "reduced"

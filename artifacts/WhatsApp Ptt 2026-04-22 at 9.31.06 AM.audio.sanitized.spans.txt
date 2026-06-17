@@ -1,0 +1,5 @@
+Detected sensitive spans:
+
+- phone | mitigation=mask | span=(63, 79)
+  original : 8123456789
+  sanitized: [REDACTED:PHONE]

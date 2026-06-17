@@ -48,11 +48,14 @@ text:
     - "SecureNet Data Vault"
     - "University of Texas"
     - "the University of Texas"
+    - name: "id_number"
+      pattern: "[A-Z]{2,}\\d{1,2}[A-Z]*\\d{2,}"
+      action: "mask"
 image:
-  face_blur_kernel: 35
+  face_blur_kernel: 45
   text_detection_langs:
     - "en"
-  min_confidence: 0.3
+  min_confidence: 0.2
   enable_ocr: true
   enable_qr: true
   enable_layout: true
@@ -62,9 +65,10 @@ image:
   strip_metadata: true
   only_mitigated_info: false
   mitigated_labels: null
+  ocr_use_gpu: true
 explainability:
   save_text_spans: true
-  save_image_overlays: true
+  save_image_overlays: false
   audit_log_path: "artifacts/audit.log"
 audio:
   enabled: true
@@ -79,3 +83,6 @@ audio:
   padding_ms: 80
 video:
   enabled: true
+  redaction_mode: "per_frame"
+  carryover_frames: 30
+  frame_stride: 5

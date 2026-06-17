@@ -1,0 +1,368 @@
+{
+  "timestamp": "2026-06-14T17:35:32.720255+00:00",
+  "modality": "image",
+  "detection_mode": "regex_fallback",
+  "source": "artifacts\\my_id_test_frames\\my_id_test_frame_00120.png",
+  "output": "artifacts\\my_id_test_frame_00120.sanitized.png",
+  "artifacts": [],
+  "entity_count": 13,
+  "ffmpeg_fallback": false,
+  "multi_speaker_detected": false,
+  "redaction_confidence": "normal",
+  "failure_reason": null,
+  "spans": [
+    {
+      "span_text": null,
+      "entity_type": "face",
+      "detection_method": "heuristic",
+      "mitigation_applied": "blur",
+      "confidence": null,
+      "timeline_window": [
+        421,
+        841,
+        57,
+        57
+      ]
+    },
+    {
+      "span_text": "1",
+      "entity_type": "scene_text",
+      "detection_method": "heuristic",
+      "mitigation_applied": "replace",
+      "confidence": null,
+      "timeline_window": [
+        255,
+        755,
+        28,
+        104
+      ]
+    },
+    {
+      "span_text": "H",
+      "entity_type": "scene_text",
+      "detection_method": "heuristic",
+      "mitigation_applied": "replace",
+      "confidence": null,
+      "timeline_window": [
+        214,
+        770,
+        74,
+        220
+      ]
+    },
+    {
+      "span_text": "2",
+      "entity_type": "scene_text",
+      "detection_method": "heuristic",
+      "mitigation_applied": "replace",
+      "confidence": null,
+      "timeline_window": [
+        149,
+        1073,
+        39,
+        89
+      ]
+    },
+    {
+      "span_text": "6",
+      "entity_type": "scene_text",
+      "detection_method": "heuristic",
+      "mitigation_applied": "replace",
+      "confidence": null,
+      "timeline_window": [
+        848,
+        1061,
+        29,
+        77
+      ]
+    },
+    {
+      "span_text": "0",
+      "entity_type": "scene_text",
+      "detection_method": "heuristic",
+      "mitigation_applied": "replace",
+      "confidence": null,
+      "timeline_window": [
+        571,
+        1135,
+        22,
+        20
+      ]
+    },
+    {
+      "span_text": "2",
+      "entity_type": "scene_text",
+      "detection_method": "heuristic",
+      "mitigation_applied": "replace",
+      "confidence": null,
+      "timeline_window": [
+        568,
+        1152,
+        26,
+        42
+      ]
+    },
+    {
+      "span_text": "8",
+      "entity_type": "scene_text",
+      "detection_method": "heuristic",
+      "mitigation_applied": "replace",
+      "confidence": null,
+      "timeline_window": [
+        557,
+        1189,
+        62,
+        88
+      ]
+    },
+    {
+      "span_text": "3",
+      "entity_type": "scene_text",
+      "detection_method": "heuristic",
+      "mitigation_applied": "replace",
+      "confidence": null,
+      "timeline_window": [
+        998,
+        1251,
+        40,
+        93
+      ]
+    },
+    {
+      "span_text": "1",
+      "entity_type": "scene_text",
+      "detection_method": "heuristic",
+      "mitigation_applied": "replace",
+      "confidence": null,
+      "timeline_window": [
+        321,
+        351,
+        70,
+        259
+      ]
+    },
+    {
+      "span_text": "2",
+      "entity_type": "scene_text",
+      "detection_method": "heuristic",
+      "mitigation_applied": "replace",
+      "confidence": null,
+      "timeline_window": [
+        953,
+        476,
+        31,
+        69
+      ]
+    },
+    {
+      "span_text": "5",
+      "entity_type": "scene_text",
+      "detection_method": "heuristic",
+      "mitigation_applied": "replace",
+      "confidence": null,
+      "timeline_window": [
+        584,
+        1144,
+        32,
+        51
+      ]
+    },
+    {
+      "span_text": "1",
+      "entity_type": "scene_text",
+      "detection_method": "heuristic",
+      "mitigation_applied": "replace",
+      "confidence": null,
+      "timeline_window": [
+        925,
+        1492,
+        30,
+        82
+      ]
+    }
+  ],
+  "entities": [
+    {
+      "label": "face",
+      "confidence": 0.9,
+      "text": null,
+      "span": null,
+      "bbox": {
+        "x": 421,
+        "y": 841,
+        "width": 57,
+        "height": 57
+      },
+      "mitigation": "blur",
+      "detection_method": "heuristic"
+    },
+    {
+      "label": "scene_text",
+      "confidence": 0.8186258245586941,
+      "text": "1",
+      "span": null,
+      "bbox": {
+        "x": 255,
+        "y": 755,
+        "width": 28,
+        "height": 104
+      },
+      "mitigation": "replace",
+      "detection_method": "heuristic"
+    },
+    {
+      "label": "scene_text",
+      "confidence": 0.8135425139085193,
+      "text": "H",
+      "span": null,
+      "bbox": {
+        "x": 214,
+        "y": 770,
+        "width": 74,
+        "height": 220
+      },
+      "mitigation": "replace",
+      "detection_method": "heuristic"
+    },
+    {
+      "label": "scene_text",
+      "confidence": 0.7227500380800258,
+      "text": "2",
+      "span": null,
+      "bbox": {
+        "x": 149,
+        "y": 1073,
+        "width": 39,
+        "height": 89
+      },
+      "mitigation": "replace",
+      "detection_method": "heuristic"
+    },
+    {
+      "label": "scene_text",
+      "confidence": 0.41316766853413256,
+      "text": "6",
+      "span": null,
+      "bbox": {
+        "x": 848,
+        "y": 1061,
+        "width": 29,
+        "height": 77
+      },
+      "mitigation": "replace",
+      "detection_method": "heuristic"
+    },
+    {
+      "label": "scene_text",
+      "confidence": 0.4536679294436716,
+      "text": "0",
+      "span": null,
+      "bbox": {
+        "x": 571,
+        "y": 1135,
+        "width": 22,
+        "height": 20
+      },
+      "mitigation": "replace",
+      "detection_method": "heuristic"
+    },
+    {
+      "label": "scene_text",
+      "confidence": 0.9861954957065997,
+      "text": "2",
+      "span": null,
+      "bbox": {
+        "x": 568,
+        "y": 1152,
+        "width": 26,
+        "height": 42
+      },
+      "mitigation": "replace",
+      "detection_method": "heuristic"
+    },
+    {
+      "label": "scene_text",
+      "confidence": 0.9692553718594041,
+      "text": "8",
+      "span": null,
+      "bbox": {
+        "x": 557,
+        "y": 1189,
+        "width": 62,
+        "height": 88
+      },
+      "mitigation": "replace",
+      "detection_method": "heuristic"
+    },
+    {
+      "label": "scene_text",
+      "confidence": 0.9833731215779018,
+      "text": "3",
+      "span": null,
+      "bbox": {
+        "x": 998,
+        "y": 1251,
+        "width": 40,
+        "height": 93
+      },
+      "mitigation": "replace",
+      "detection_method": "heuristic"
+    },
+    {
+      "label": "scene_text",
+      "confidence": 0.6366231375824647,
+      "text": "1",
+      "span": null,
+      "bbox": {
+        "x": 321,
+        "y": 351,
+        "width": 70,
+        "height": 259
+      },
+      "mitigation": "replace",
+      "detection_method": "heuristic"
+    },
+    {
+      "label": "scene_text",
+      "confidence": 0.4357897482516506,
+      "text": "2",
+      "span": null,
+      "bbox": {
+        "x": 953,
+        "y": 476,
+        "width": 31,
+        "height": 69
+      },
+      "mitigation": "replace",
+      "detection_method": "heuristic"
+    },
+    {
+      "label": "scene_text",
+      "confidence": 0.870088587169576,
+      "text": "5",
+      "span": null,
+      "bbox": {
+        "x": 584,
+        "y": 1144,
+        "width": 32,
+        "height": 51
+      },
+      "mitigation": "replace",
+      "detection_method": "heuristic"
+    },
+    {
+      "label": "scene_text",
+      "confidence": 0.6145288687112647,
+      "text": "1",
+      "span": null,
+      "bbox": {
+        "x": 925,
+        "y": 1492,
+        "width": 30,
+        "height": 82
+      },
+      "mitigation": "replace",
+      "detection_method": "heuristic"
+    }
+  ]
+}
