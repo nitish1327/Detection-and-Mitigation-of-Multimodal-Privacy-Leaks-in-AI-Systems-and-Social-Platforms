@@ -5,8 +5,11 @@ app:
 text:
   enable_spacy: true
   max_doc_length: 10000
-  mask_style: "brackets"  # options: brackets, asterisks, synthetic
+  mask_style: "faker"  # options: brackets, asterisks, synthetic, faker
   confidence_threshold: 0.45
+  faker_locale: "en_US"
+  static_replacements:
+    "Internal Project Alpha": "Public Project Beta"
   regex_entities:
     - name: "email"
       pattern: "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"
@@ -17,6 +20,34 @@ text:
     - name: "credit_card"
       pattern: "\\b(?:\\d[ -]*?){13,16}\\b"
       action: "mask"
+    - name: "aadhar"
+      pattern: "\\b\\d{4}[\\s-]\\d{4}[\\s-]\\d{4}\\b|\\b\\d{12}\\b"
+      action: "blur"
+    - name: "dob"
+      pattern: "\\b\\d{2}[/-]\\d{2}[/-]\\d{4}\\b|\\b\\d{4}[/-]\\d{2}[/-]\\d{2}\\b"
+      action: "replace"
+    - name: "address"
+      pattern: "(?i)\\b(?:House|Plot|H\\.No|Sector|Phase|Street|Road|City|District|State|Pin|Door)\\b"
+      action: "replace"
+    - name: "numbers"
+      pattern: "\\b\\d{5,}\\b"
+      action: "replace"
+    - name: "license"
+      pattern: "\\b[a-zA-Z]{2}[-\\s]?[0-9]{2}[-\\s]?[0-9]{4}[-\\s]?[0-9]{7}\\b|\\b[a-zA-Z]{2}[0-9]{13}\\b|\\b[a-zA-Z]{2}[a-zA-Z0-9]{2}[-\\s]?[0-9]{11,12}\\b|\\b(?:license|dl)\\s*(?:no|number)[\\s.:-]*([a-zA-Z0-9\\s-]{10,20})\\b"
+      action: "replace"
+    - name: "roll_number"
+      pattern: "\\b[A-Za-z]{3}\\d[A-Za-z]{2}\\d{2}[A-Za-z]{2}\\d{3}\\b"
+      action: "replace"
+    - name: "name"
+      pattern: "\\b[A-Z]{3,20}(?:\\s+[A-Z\\.]+){1,5}\\b"
+      action: "replace"
+  allowlist:
+    - "TechCorp Solutions Inc."
+    - "VerifiedCheck Services"
+    - "LeakWatch"
+    - "SecureNet Data Vault"
+    - "University of Texas"
+    - "the University of Texas"
     - name: "id_number"
       pattern: "[A-Z]{2,}\\d{1,2}[A-Z]*\\d{2,}"
       action: "mask"
@@ -26,6 +57,14 @@ image:
     - "en"
   min_confidence: 0.2
   enable_ocr: true
+  enable_qr: true
+  enable_layout: true
+  enable_mrz: true
+  padding_percent: 0.05
+  default_style: "synthetic"
+  strip_metadata: true
+  only_mitigated_info: false
+  mitigated_labels: null
   ocr_use_gpu: true
 explainability:
   save_text_spans: true

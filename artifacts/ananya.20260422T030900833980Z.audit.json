@@ -1,0 +1,65 @@
+{
+  "timestamp": "2026-04-22T03:09:00.832475+00:00",
+  "modality": "audio",
+  "detection_mode": "hybrid",
+  "source": "C:\\Capstone_pranav_branch\\Capstone_pranav_branch\\samples\\audio\\ananya.ogg",
+  "output": "artifacts\\ananya.sanitized.wav",
+  "artifacts": [
+    "artifacts\\ananya.transcript.txt",
+    "artifacts\\ananya.audio.sanitized.txt",
+    "artifacts\\ananya.audio.sanitized.spans.txt",
+    "artifacts\\ananya.audio.beeps.json"
+  ],
+  "entity_count": 2,
+  "ffmpeg_fallback": false,
+  "spans": [
+    {
+      "span_text": "Ganyananya",
+      "entity_type": "PERSON",
+      "detection_method": "nlp",
+      "mitigation_applied": "mask",
+      "confidence": 0.8,
+      "timeline_window": [
+        901,
+        2287
+      ]
+    },
+    {
+      "span_text": "Gmail.com",
+      "entity_type": "ORG",
+      "detection_method": "nlp",
+      "mitigation_applied": "mask",
+      "confidence": 0.8,
+      "timeline_window": [
+        11569,
+        12753
+      ]
+    }
+  ],
+  "entities": [
+    {
+      "label": "PERSON",
+      "confidence": 0.8,
+      "text": "Jesse Norton",
+      "span": {
+        "start": 8,
+        "end": 20
+      },
+      "bbox": null,
+      "mitigation": "mask",
+      "detection_method": "nlp"
+    },
+    {
+      "label": "ORG",
+      "confidence": 0.8,
+      "text": "Moore-Paul",
+      "span": {
+        "start": 95,
+        "end": 105
+      },
+      "bbox": null,
+      "mitigation": "mask",
+      "detection_method": "nlp"
+    }
+  ]
+}

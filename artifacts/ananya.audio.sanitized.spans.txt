@@ -1,0 +1,11 @@
+Detected sensitive spans:
+
+- PERSON | mitigation=mask | span=(8, 19)
+  original : Ganyananya
+  sanitized: Paul Jarvis
+- phone | mitigation=mask | span=(42, 54)
+  original : 7676696644
+  sanitized:  581-785-909
+- ORG | mitigation=mask | span=(96, 111)
+  original : Gmail.com
+  sanitized: te Conner and S

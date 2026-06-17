@@ -38,6 +38,7 @@ class DetectedEntity(BaseModel):
     bbox: BoundingBox | None = None
     mitigation: Literal["mask", "blur", "replace", "none"] = "none"
     explanation: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
     detection_method: Literal["regex", "nlp", "heuristic", "unknown"] = "unknown"
 
 

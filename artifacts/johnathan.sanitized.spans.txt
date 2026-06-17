@@ -1,0 +1,29 @@
+Detected sensitive spans:
+
+- PERSON | mitigation=replace | span=(11, 24)
+  original : Johnathan D. Smith
+  sanitized: Joshua Walker
+- GPE | mitigation=replace | span=(83, 100)
+  original : Austin
+  sanitized: South Daltonshire
+- CARDINAL | mitigation=replace | span=(131, 137)
+  original : 123
+  sanitized: 408345
+- address | mitigation=replace | span=(173, 215)
+  original : city
+  sanitized: 124 Davis Mountain, East Chelsea, IA 77347
+- GPE | mitigation=replace | span=(219, 230)
+  original : Chicago
+  sanitized: Reedborough
+- GPE | mitigation=replace | span=(232, 244)
+  original : Illinois
+  sanitized: Gonzaleztown
+- ORG | mitigation=replace | span=(349, 364)
+  original : Computer Science
+  sanitized: Benjamin-Morgan
+- ORG_email | mitigation=replace | span=(440, 462)
+  original : john.smith.dev@example.com
+  sanitized: codyjuarez@example.net
+- CARDINAL | mitigation=replace | span=(480, 486)
+  original : 555
+  sanitized: 981542

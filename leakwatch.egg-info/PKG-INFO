@@ -78,6 +78,7 @@ tests/
   # Scan an image
   D:/Capstone/.venv/Scripts/python.exe -m leakwatch scan-image path/to/photo.jpg
 
+  # Scan audio (expects a sibling .txt transcript; toggled via config.audio.enabled)
   # Scan audio (works with phone recordings like .m4a/.mp3/.wav)
   D:/Capstone/.venv/Scripts/python.exe -m leakwatch scan-audio path/to/recording.wav
 
@@ -89,6 +90,7 @@ tests/
   ```
 
 ### Sample Media Assets
+- Audio: `samples/audio/demo_call.wav` (plus transcript) demonstrates the `scan-audio` flow; regenerate via `python scripts/generate_demo_media.py` if needed.
 - Audio: `samples/audio/demo_call.wav` (plus transcript `demo_call.txt`) demonstrates the `scan-audio` flow. For real phone recordings, LeakWatch can:
   - use companion transcript if present (`<name>.txt`), or
   - auto-transcribe using Whisper when transcript is missing.

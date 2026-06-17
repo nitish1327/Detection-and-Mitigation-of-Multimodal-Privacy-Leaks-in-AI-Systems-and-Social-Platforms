@@ -18,12 +18,14 @@ dependencies = [
     "pillow>=10.2",
     "numpy>=1.26",
     "fastapi>=0.109",
-    "uvicorn>=0.25"
+    "uvicorn>=0.25",
+    "faker>=19.0"
 ]
 
 [project.optional-dependencies]
 audio = [
-    "openai-whisper>=20240930"
+    "openai-whisper>=20240930",
+    "imageio-ffmpeg>=0.4.9"
 ]
 dev = [
     "pytest>=8.2",

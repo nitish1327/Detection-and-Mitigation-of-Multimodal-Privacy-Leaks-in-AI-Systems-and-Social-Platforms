@@ -1,0 +1,98 @@
+﻿============================= test session starts =============================
+platform win32 -- Python 3.11.9, pytest-7.4.3, pluggy-1.3.0 -- C:\Users\nitis\AppData\Local\Microsoft\WindowsApps\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\python.exe
+cachedir: .pytest_cache
+hypothesis profile 'default'
+rootdir: C:\Capstone\code\-Detection-and-Mitigation-of-Multimodal-Privacy-Leaks-in-AI-Systems-and-Social-Platforms
+plugins: anyio-4.12.1, Faker-40.11.0, hypothesis-6.147.0, langsmith-0.7.16, cov-7.0.0
+collecting ... collected 4 items
+
+tests/test_image_mitigation.py::test_padding_application Pixel at (38, 38): [49 49 49]
+Pixel at (37, 37): [255 255 255]
+FAILED
+tests/test_image_mitigation.py::test_pixelate_style ROI[0,0]: [14 14 14]
+ROI[0,1]: [15 15 15]
+FAILED
+tests/test_image_mitigation.py::test_redact_style PASSED
+tests/test_image_mitigation.py::test_aggressive_blur_forced PASSED
+
+================================== FAILURES ===================================
+__________________________ test_padding_application ___________________________
+
+sample_image = WindowsPath('C:/Users/nitis/AppData/Local/Temp/pytest-of-nitis/pytest-8/test_padding_application0/test.jpg')
+
+    def test_padding_application(sample_image):
+        config = ImageConfig(padding_percent=0.1, default_style="redact")
+        mitigator = ImageMitigator(config)
+    
+        entity = DetectedEntity(
+            modality=Modality.IMAGE,
+            label="person",
+            confidence=1.0,
+            bbox=BoundingBox(x=40, y=40, width=20, height=20)
+        )
+    
+        output_path = sample_image.with_name("padded.jpg")
+        mitigator.mitigate(sample_image, [entity], output_path)
+    
+        img = cv2.imread(str(output_path))
+    
+        # Debug info
+        print(f"Pixel at (38, 38): {img[38, 38]}")
+        print(f"Pixel at (37, 37): {img[37, 37]}")
+    
+        # Use a tolerance for comparison if needed, though for redact it should be exact
+>       assert np.all(img[38, 38] == 50), f"Expected [50,50,50] at (38,38), got {img[38,38]}"
+E       AssertionError: Expected [50,50,50] at (38,38), got [49 49 49]
+E       assert np.False_
+E        +  where np.False_ = <function all at 0x000001B24FD865B0>(array([49, 49, 49], dtype=uint8) == 50)
+E        +    where <function all at 0x000001B24FD865B0> = np.all
+
+tests\test_image_mitigation.py:38: AssertionError
+_____________________________ test_pixelate_style _____________________________
+
+sample_image = WindowsPath('C:/Users/nitis/AppData/Local/Temp/pytest-of-nitis/pytest-8/test_pixelate_style0/test.jpg')
+
+    def test_pixelate_style(sample_image):
+        config = ImageConfig(default_style="pixelate", padding_percent=0)
+        mitigator = ImageMitigator(config)
+    
+        entity = DetectedEntity(
+            modality=Modality.IMAGE,
+            label="person",
+            confidence=1.0,
+            bbox=BoundingBox(x=10, y=10, width=50, height=50)
+        )
+    
+        # Create a gradient image
+        img_multi = np.zeros((100, 100, 3), dtype=np.uint8)
+        for i in range(100):
+            img_multi[:, i] = i
+        cv2.imwrite(str(sample_image), img_multi)
+    
+        output_path = sample_image.with_name("pixelated.jpg")
+        mitigator.mitigate(sample_image, [entity], output_path)
+    
+        img_out = cv2.imread(str(output_path))
+        roi_out = img_out[10:60, 10:60]
+    
+        # Debug info
+        print(f"ROI[0,0]: {roi_out[0, 0]}")
+        print(f"ROI[0,1]: {roi_out[0, 1]}")
+    
+        # In a 5x5 grid for 50x50 ROI, pixels 0 and 1 should be identical
+>       assert np.all(roi_out[0, 0] == roi_out[0, 1]), f"Pixels at (0,0) and (0,1) differ: {roi_out[0,0]} vs {roi_out[0,1]}"
+E       AssertionError: Pixels at (0,0) and (0,1) differ: [14 14 14] vs [15 15 15]
+E       assert np.False_
+E        +  where np.False_ = <function all at 0x000001B24FD865B0>(array([14, 14..., dtype=uint8) == array([15, 15..., dtype=uint8)
+E        +    where <function all at 0x000001B24FD865B0> = np.all
+E           Full diff:
+E           - array([15, 15, 15], dtype=uint8)
+E           ?         ^   ^   ^
+E           + array([14, 14, 14], dtype=uint8)
+E           ?         ^   ^   ^)
+
+tests\test_image_mitigation.py:69: AssertionError
+=========================== short test summary info ===========================
+FAILED tests/test_image_mitigation.py::test_padding_application - AssertionEr...
+FAILED tests/test_image_mitigation.py::test_pixelate_style - AssertionError: ...
+========================= 2 failed, 2 passed in 1.18s =========================

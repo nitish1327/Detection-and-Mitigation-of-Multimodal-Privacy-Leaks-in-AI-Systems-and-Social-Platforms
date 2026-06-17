@@ -1,0 +1,26 @@
+[
+  {
+    "label": "PERSON",
+    "start_sec": 1.176910102739726,
+    "end_sec": 2.8223493150684935,
+    "entity_indexes": [
+      0
+    ],
+    "entity_ids": [
+      "0:PERSON:11:24:Thomas Shelby"
+    ],
+    "ffmpeg_fallback": false
+  },
+  {
+    "label": "ORG",
+    "start_sec": 7.232931506849315,
+    "end_sec": 8.3413125,
+    "entity_indexes": [
+      1
+    ],
+    "entity_ids": [
+      "1:ORG:64:73:Derby Die"
+    ],
+    "ffmpeg_fallback": false
+  }
+]

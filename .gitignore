@@ -1,3 +1,19 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+ffmpeg.exe
+scratch/
+# artifacts/ is now allowed for demo purposes
+# samples/ is allowed
+!artifacts/*.wav
+!artifacts/*.txt
+!artifacts/*.json
+!samples/audio/*.mp4
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.pyc
