@@ -317,6 +317,51 @@ class ImageDetector:
                             )
                         # If we found something at this scale, keep looking for others but maybe skip this version
 
+        # Heuristic fallback for missed QR codes (e.g. low contrast or distorted)
+        h_img, w_img = image.shape[:2]
+        img_area = h_img * w_img
+        
+        grad_x = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
+        grad_y = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
+        abs_grad_x = cv2.convertScaleAbs(grad_x)
+        abs_grad_y = cv2.convertScaleAbs(grad_y)
+        grad = cv2.addWeighted(abs_grad_x, 0.5, abs_grad_y, 0.5, 0)
+        
+        blurred = cv2.blur(grad, (25, 25))
+        _, thresh = cv2.threshold(blurred, 50, 255, cv2.THRESH_BINARY)
+        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        for cnt in contours:
+            x, y, w, h = cv2.boundingRect(cnt)
+            aspect_ratio = float(w) / h
+            area = w * h
+            
+            # QR checks: aspect ratio close to 1.0, area between 0.8% and 10% of total image area
+            if 0.8 <= aspect_ratio <= 1.25:
+                if img_area * 0.008 <= area <= img_area * 0.1:
+                    # Check for overlap with any already detected QR code
+                    is_duplicate = False
+                    for px, py, pw, ph in processed_points:
+                        overlap_x = max(0, min(x + w, px + pw) - max(x, px))
+                        overlap_y = max(0, min(y + h, py + ph) - max(y, py))
+                        overlap_area = overlap_x * overlap_y
+                        if overlap_area > 0.5 * min(area, pw * ph):
+                            is_duplicate = True
+                            break
+                            
+                    if not is_duplicate:
+                        bbox = BoundingBox(x=x, y=y, width=w, height=h)
+                        processed_points.add((x, y, w, h))
+                        yield DetectedEntity(
+                            modality=Modality.IMAGE,
+                            label="qr_code",
+                            confidence=0.6,
+                            text="QR_CODE",
+                            bbox=bbox,
+                            mitigation="blur",
+                            detection_method="heuristic",
+                        )
+
     def _detect_mrz(self, ocr_results: List[Tuple[Sequence[Tuple[float, float]], str, float]]) -> Iterable[DetectedEntity]:
         """Detect MRZ zones in identity documents."""
         for bbox_points, text, confidence in ocr_results:

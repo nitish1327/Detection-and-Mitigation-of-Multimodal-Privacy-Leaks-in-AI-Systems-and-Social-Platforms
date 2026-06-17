@@ -97,3 +97,33 @@ def test_nlp_importerror_emits_warning_and_uses_regex_fallback_mode(tmp_path, ca
     assert result.audit_log is not None
     payload = json.loads(Path(result.audit_log).read_text(encoding="utf-8"))
     assert payload["detection_mode"] == "regex_fallback"
+
+
+def test_text_wrapping_behavior(tmp_path):
+    input_text = "This is a very long sentence that has more than fifty characters to test if the wrapping logic wraps correctly."
+    sample = tmp_path / "long_input.txt"
+    sample.write_text(input_text, encoding="utf-8")
+
+    config = LeakWatchConfig(
+        app=AppConfig(output_dir=tmp_path / "artifacts"),
+        text=TextConfig(
+            enable_spacy=False,
+            wrap_lines=True,
+            max_line_length=40,
+        ),
+        image=ImageConfig(enable_ocr=False),
+        explainability=ExplainabilityConfig(
+            save_text_spans=False,
+            save_image_overlays=False,
+            audit_log_path=tmp_path / "audit.log",
+        ),
+    )
+
+    manager = PipelineManager(config)
+    result = manager.process_text(sample)
+
+    assert result.mitigated_output is not None
+    sanitized_text = Path(result.mitigated_output).read_text(encoding="utf-8")
+    lines = sanitized_text.splitlines()
+    assert len(lines) > 1
+    assert all(len(line) <= 40 for line in lines)

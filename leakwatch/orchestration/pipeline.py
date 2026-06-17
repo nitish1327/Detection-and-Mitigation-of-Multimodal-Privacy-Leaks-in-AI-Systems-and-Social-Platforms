@@ -405,7 +405,19 @@ class PipelineManager:
         sanitized_text, mitigated_entities = self.text_mitigator.mitigate(raw_text, entities)
         output_path = self._output_path(source_reference, suffix=suffix)
         ensure_dir(output_path)
-        output_path.write_text(sanitized_text, encoding="utf-8")
+
+        # Apply line wrapping if configured
+        final_text = sanitized_text
+        if self.config.text.wrap_lines:
+            import textwrap
+            paragraphs = sanitized_text.split("\n")
+            wrapped_paragraphs = [
+                textwrap.fill(p, width=self.config.text.max_line_length) if p.strip() else p
+                for p in paragraphs
+            ]
+            final_text = "\n".join(wrapped_paragraphs)
+
+        output_path.write_text(final_text, encoding="utf-8")
         artifacts = []
         if self.config.explainability.save_text_spans and mitigated_entities:
             span_path = output_path.with_suffix(".spans.txt")

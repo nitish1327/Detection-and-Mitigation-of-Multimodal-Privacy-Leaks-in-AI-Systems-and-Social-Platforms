@@ -18,6 +18,7 @@ class RegexEntityConfig(BaseModel):
     name: str
     pattern: str
     action: str = "mask"
+    case_sensitive: bool = False
 
 
 class TextConfig(BaseModel):
@@ -29,6 +30,8 @@ class TextConfig(BaseModel):
     allowlist: list[str] = Field(default_factory=list)
     faker_locale: Union[str, list[str]] = "en_US"
     static_replacements: dict[str, str] = Field(default_factory=dict)
+    wrap_lines: bool = False
+    max_line_length: int = 80
 
 
 class ImageConfig(BaseModel):

@@ -8,6 +8,8 @@ text:
   mask_style: "faker"  # options: brackets, asterisks, synthetic, faker
   confidence_threshold: 0.45
   faker_locale: "en_US"
+  wrap_lines: true
+  max_line_length: 80
   static_replacements:
     "Internal Project Alpha": "Public Project Beta"
   regex_entities:
@@ -41,6 +43,7 @@ text:
     - name: "name"
       pattern: "\\b[A-Z]{3,20}(?:\\s+[A-Z\\.]+){1,5}\\b"
       action: "replace"
+      case_sensitive: true
   allowlist:
     - "TechCorp Solutions Inc."
     - "VerifiedCheck Services"

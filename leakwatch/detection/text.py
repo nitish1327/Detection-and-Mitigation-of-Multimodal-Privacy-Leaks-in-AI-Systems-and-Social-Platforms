@@ -36,10 +36,12 @@ class TextDetector:
         self._nlp_configured = bool(config.enable_spacy)
         self._nlp_loaded = False
         self._nlp_failed = False
-        self._patterns = [
-            _RegexPattern(item.name, re.compile(item.pattern, re.IGNORECASE), item.action)
-            for item in config.regex_entities
-        ]
+        self._patterns = []
+        for item in config.regex_entities:
+            flags = 0 if item.case_sensitive else re.IGNORECASE
+            self._patterns.append(
+                _RegexPattern(item.name, re.compile(item.pattern, flags), item.action)
+            )
         if self._nlp_configured:
             if spacy is None:
                 self._nlp_failed = True
