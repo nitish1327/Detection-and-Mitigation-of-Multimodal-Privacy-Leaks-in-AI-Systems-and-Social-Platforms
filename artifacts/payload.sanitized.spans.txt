@@ -1,8 +1,5 @@
 Detected sensitive spans:
 
-- email | mitigation=mask | span=(40, 56)
-  original : john.doe@example.com
-  sanitized: [REDACTED:EMAIL]
-- phone | mitigation=mask | span=(85, 101)
-  original : 1-555-010-9988
-  sanitized: ACTED:PHONE]. Pl
+- GPE | mitigation=replace | span=(8, 20)
+  original : ananya
+  sanitized: Jenniferberg

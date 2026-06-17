@@ -63,6 +63,7 @@ _DOCUMENT_FIELD_LABELS = {
     "reg no", "reg no.", "registration no",
     "class of vehicle", "cov", "type of vehicle",
     "transport", "non-transport", "non transport",
+}
 LOGGER = get_logger(__name__)
 
 # Regex patterns for ID-like strings (enrollment numbers, student IDs, etc.)
@@ -179,9 +180,8 @@ class ImageDetector:
     # --- ID Card Detection via Color Segmentation -------------------------
     def _detect_id_card_by_color(self, image: np.ndarray) -> Iterable[DetectedEntity]:
         """Detect light-colored rectangular cards against darker backgrounds."""
-        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-        img_h, img_w = image.shape[:2]
-        img_area = img_h * img_w
+        # Stub: color-segmentation logic not yet implemented.
+        return []
 
     def _get_ocr_results(self, image: np.ndarray) -> List[Tuple[Sequence[Tuple[float, float]], str, float]]:
         """Run OCR and return raw detections (bbox, text, confidence)."""

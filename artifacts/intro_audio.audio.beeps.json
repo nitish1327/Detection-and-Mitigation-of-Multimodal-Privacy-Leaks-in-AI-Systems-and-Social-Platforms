@@ -1,0 +1,14 @@
+[
+  {
+    "label": "PERSON",
+    "start_sec": 1.0948985507246376,
+    "end_sec": 3.1641086956521742,
+    "entity_indexes": [
+      0
+    ],
+    "entity_ids": [
+      "0:PERSON:8:21:Gownia Ananya"
+    ],
+    "ffmpeg_fallback": false
+  }
+]

@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Privacy Sandbox</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header class="header">
+      <img src="icons/icon48.png" alt="" class="logo" width="28" height="28" />
+      <div>
+        <h1>Privacy Sandbox</h1>
+        <p class="subtitle">LeakWatch local sanitization</p>
+      </div>
+      <span id="backend-status" class="status-badge status-unknown" title="Backend connection">●</span>
+    </header>
+
+    <section class="panel">
+      <label for="input-text" class="label">Your prompt</label>
+      <textarea
+        id="input-text"
+        rows="6"
+        placeholder="Enter text to sanitize before sending to an LLM…"
+        spellcheck="true"
+      ></textarea>
+      <button id="sanitize-btn" type="button" class="btn btn-primary">Sanitize</button>
+    </section>
+
+    <section id="error-panel" class="error-panel hidden" role="alert"></section>
+
+    <section id="preview-panel" class="panel hidden">
+      <h2 class="section-title">Sanitized preview</h2>
+      <div class="compare">
+        <div class="compare-block">
+          <span class="label">Original</span>
+          <pre id="original-preview" class="preview-box"></pre>
+        </div>
+        <div class="compare-block">
+          <span class="label">Preview</span>
+          <pre id="sanitized-preview" class="preview-box highlight"></pre>
+        </div>
+      </div>
+
+      <div class="entities-block">
+        <h3 class="section-title">Detected entities</h3>
+        <ul id="entities-list" class="entities-list"></ul>
+        <p id="no-entities" class="muted hidden">No sensitive entities detected.</p>
+      </div>
+
+      <div class="actions">
+        <button id="copy-btn" type="button" class="btn btn-secondary" disabled>
+          Copy Sanitized Text
+        </button>
+        <button id="send-btn" type="button" class="btn btn-accent" disabled>
+          Send To LLM
+        </button>
+      </div>
+    </section>
+
+    <footer class="footer">
+      <span>localhost:8000 only · no cloud · no storage</span>
+    </footer>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

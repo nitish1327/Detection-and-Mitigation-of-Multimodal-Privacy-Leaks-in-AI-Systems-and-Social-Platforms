@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, HttpUrl, model_validator
 
@@ -23,6 +24,18 @@ app = FastAPI(
         "REST interface for the LeakWatch multimodal privacy leak detection "
         "pipeline. Reuses the CLI components without modification."
     ),
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+    ],
+    allow_origin_regex=r"chrome-extension://.*",
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["*"],
 )
 
 CONFIG = get_config()
@@ -71,6 +84,13 @@ class ScanResponse(BaseModel):
     mitigated_output: str | None = None
     audit_log: str | None = None
     artifacts: list[str] = Field(default_factory=list)
+    sanitized_text: str | None = None
+    redacted_entities: list[str] = Field(default_factory=list)
+
+
+@app.get("/health")
+def health() -> dict[str, str]:
+    return {"status": "ok", "service": "leakwatch"}
 
 
 @app.post("/scan/text", response_model=ScanResponse)
@@ -85,7 +105,11 @@ def scan_text(request: TextScanRequest) -> ScanResponse:
         else:
             source_path, scratch_dir = _materialize_file(request.path, request.url, suffix=".txt")
         result = PIPELINE.process_text(source_path)
-        return _build_response(result, request.policy)
+        response = _build_response(result, request.policy)
+        if result.mitigated_output and result.mitigated_output.exists():
+            response.sanitized_text = result.mitigated_output.read_text(encoding="utf-8")
+        response.redacted_entities = _extract_redacted_labels(result)
+        return response
     finally:
         _cleanup(scratch_dir)
 
@@ -184,6 +208,19 @@ def _build_response(result: DetectionResult, policy: PolicyConfig) -> ScanRespon
         audit_log=str(result.audit_log) if result.audit_log else None,
         artifacts=[str(path) for path in result.artifacts],
     )
+
+
+def _extract_redacted_labels(result: DetectionResult) -> list[str]:
+    labels: list[str] = []
+    seen: set[str] = set()
+    for entity in result.entities:
+        if entity.mitigation == "none":
+            continue
+        label = entity.label.upper()
+        if label not in seen:
+            seen.add(label)
+            labels.append(label)
+    return labels
 
 
 def _evaluate_policy(policy: PolicyConfig, result: DetectionResult) -> tuple[Literal["allow", "block"], str | None]:
