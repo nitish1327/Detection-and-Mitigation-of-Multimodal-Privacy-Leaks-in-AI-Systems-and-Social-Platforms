@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Privacy Sandbox",
-  "version": "1.0.0",
-  "description": "Sanitize prompts locally via LeakWatch before sending them to LLM chat sites.",
+  "version": "1.1.0",
+  "description": "Sanitize text and images locally via LeakWatch before sharing with LLMs or downloads.",
   "permissions": [
     "activeTab",
     "scripting",

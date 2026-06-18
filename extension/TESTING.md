@@ -8,7 +8,9 @@ Run from the repository root:
 python extension/run_tests.py
 ```
 
-This validates backend health, sanitization API, extension file structure, and content-script adapter logic.
+This validates backend health, text + image sanitization APIs, extension file structure, tab UI, and content-script adapter logic.
+
+Sample images are read from `samples_anu_original/` if present, otherwise `samples_anu/`.
 
 ## Manual browser tests
 
@@ -23,15 +25,29 @@ This validates backend health, sanitization API, extension file structure, and c
 - [ ] Click extension icon — popup opens without errors
 - [ ] Status dot is **green** when backend is running
 - [ ] Status dot is **red** when backend is stopped
-- [ ] Enter `My email is abc@gmail.com` and click **Sanitize**
+### Text tab
+
+- [ ] **Text** tab — enter `My email is abc@gmail.com` and click **Sanitize**
 - [ ] Preview shows original and sanitized text side by side
 - [ ] Detected entities list shows labels (e.g. EMAIL)
-- [ ] **Copy Sanitized Text** copies to clipboard (paste elsewhere to verify)
+- [ ] **Copy Sanitized Text** copies to clipboard
+
+### Image tab
+
+- [ ] Switch to **Image** tab
+- [ ] Upload `samples_anu/adhaar_image.jpeg` (or `samples_anu_original/`)
+- [ ] Original preview appears immediately
+- [ ] Click **Sanitize Image** — status dot green, no errors
+- [ ] Sanitized preview appears (face blur, Aadhaar/name redaction)
+- [ ] Detected entities include labels such as FACE, AADHAR, PERSON
+- [ ] **Download Sanitized Image** saves a file locally
 
 ### Error handling
 
 - [ ] Stop backend → Sanitize shows clear offline error
 - [ ] Empty textarea → Sanitize shows validation error
+- [ ] Image tab with no file → Sanitize shows validation error
+- [ ] Upload non-image file → unsupported format error
 - [ ] Non-LLM tab active → **Send To LLM** shows unsupported-site error
 
 ### ChatGPT injection

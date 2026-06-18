@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import base64
 import shutil
 import tempfile
 import urllib.request
 from pathlib import Path
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, HttpUrl, model_validator
@@ -40,6 +41,16 @@ app.add_middleware(
 
 CONFIG = get_config()
 PIPELINE = PipelineManager(CONFIG)
+
+ALLOWED_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp", ".webp"}
+ALLOWED_IMAGE_CONTENT_TYPES = {
+    "image/png",
+    "image/jpeg",
+    "image/jpg",
+    "image/bmp",
+    "image/webp",
+    "image/pjpeg",
+}
 
 
 class PolicyConfig(BaseModel):
@@ -86,6 +97,8 @@ class ScanResponse(BaseModel):
     artifacts: list[str] = Field(default_factory=list)
     sanitized_text: str | None = None
     redacted_entities: list[str] = Field(default_factory=list)
+    sanitized_image_base64: str | None = None
+    download_url: str | None = None
 
 
 @app.get("/health")
@@ -119,7 +132,46 @@ def scan_image(request: FileScanRequest) -> ScanResponse:
     source_path, scratch_dir = _materialize_file(request.path, request.url, suffix=".png")
     try:
         result = PIPELINE.process_image(source_path)
-        return _build_response(result, request.policy)
+        response = _build_response(result, request.policy)
+        _attach_image_payload(response, result)
+        return response
+    finally:
+        _cleanup(scratch_dir)
+
+
+@app.post("/scan/image/upload", response_model=ScanResponse)
+async def scan_image_upload(file: UploadFile = File(...)) -> ScanResponse:
+    """Accept browser-uploaded images via multipart/form-data (field name: file)."""
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Image filename is required.")
+
+    suffix = Path(file.filename).suffix.lower()
+    if suffix not in ALLOWED_IMAGE_SUFFIXES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported image format '{suffix}'. Allowed: {', '.join(sorted(ALLOWED_IMAGE_SUFFIXES))}",
+        )
+
+    content_type = (file.content_type or "").lower()
+    if content_type and content_type not in ALLOWED_IMAGE_CONTENT_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported content type '{content_type}'.",
+        )
+
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="Uploaded image is empty.")
+
+    scratch_dir = Path(tempfile.mkdtemp(prefix="leakwatch_img_upload_"))
+    source_path = scratch_dir / f"upload{suffix}"
+    source_path.write_bytes(raw)
+
+    try:
+        result = PIPELINE.process_image(source_path)
+        response = _build_response(result, PolicyConfig())
+        _attach_image_payload(response, result)
+        return response
     finally:
         _cleanup(scratch_dir)
 
@@ -208,6 +260,22 @@ def _build_response(result: DetectionResult, policy: PolicyConfig) -> ScanRespon
         audit_log=str(result.audit_log) if result.audit_log else None,
         artifacts=[str(path) for path in result.artifacts],
     )
+
+
+def _attach_image_payload(response: ScanResponse, result: DetectionResult) -> None:
+    response.redacted_entities = _extract_redacted_labels(result)
+    if not result.mitigated_output or not result.mitigated_output.exists():
+        return
+
+    mitigated_path = result.mitigated_output.resolve()
+    base_dir = Path(CONFIG.app.output_dir).resolve()
+    try:
+        relative = mitigated_path.relative_to(base_dir)
+        response.download_url = f"/artifacts/download?path={relative.as_posix()}"
+    except ValueError:
+        response.download_url = f"/artifacts/download?path={result.mitigated_output.name}"
+
+    response.sanitized_image_base64 = base64.b64encode(mitigated_path.read_bytes()).decode("ascii")
 
 
 def _extract_redacted_labels(result: DetectionResult) -> list[str]:

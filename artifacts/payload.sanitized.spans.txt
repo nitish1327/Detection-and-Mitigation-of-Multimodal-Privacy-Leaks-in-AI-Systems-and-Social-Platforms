@@ -1,5 +1,5 @@
 Detected sensitive spans:
 
-- GPE | mitigation=replace | span=(8, 20)
-  original : ananya
-  sanitized: Jenniferberg
+- email | mitigation=mask | span=(12, 36)
+  original : abc@gmail.com
+  sanitized: garciabrenda@example.org

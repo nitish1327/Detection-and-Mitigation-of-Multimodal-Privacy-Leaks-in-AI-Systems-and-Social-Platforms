@@ -1,6 +1,6 @@
 # Privacy Sandbox — Installation
 
-Privacy Sandbox is a Chrome Extension (Manifest V3) that sanitizes prompts through your local LeakWatch FastAPI backend before you paste them into ChatGPT, Gemini, or Claude.
+Privacy Sandbox is a Chrome Extension (Manifest V3) that sanitizes **text** and **images** through your local LeakWatch FastAPI backend. Text can be sent to ChatGPT, Gemini, or Claude; images can be previewed and downloaded after sanitization.
 
 ## Prerequisites
 
@@ -49,12 +49,30 @@ This creates `icons/icon16.png`, `icon48.png`, and `icon128.png`.
 
 ## Step 4 — Use the extension
 
-1. Click the Privacy Sandbox icon
-2. Type or paste your prompt in the textarea
-3. Click **Sanitize** — the extension calls `POST http://localhost:8000/scan/text`
-4. Review the sanitized preview and detected entities
-5. **Copy Sanitized Text** — copies to clipboard
-6. **Send To LLM** — injects sanitized text into the active ChatGPT, Gemini, or Claude tab
+### Text tab
+
+1. Click the Privacy Sandbox icon → **Text** tab
+2. Type or paste your prompt
+3. Click **Sanitize** — calls `POST http://localhost:8000/scan/text`
+4. Review sanitized preview and detected entities
+5. **Copy Sanitized Text** or **Send To LLM** (ChatGPT / Gemini / Claude)
+
+### Image tab
+
+1. Switch to the **Image** tab
+2. Upload a PNG, JPEG, BMP, or WebP image
+3. Click **Sanitize Image** — calls `POST http://localhost:8000/scan/image/upload` (multipart)
+4. Review before/after previews and detected entities (faces, Aadhaar, OCR text, etc.)
+5. Click **Download Sanitized Image**
+
+## API endpoints used
+
+| Tab | Endpoint | Format |
+|-----|----------|--------|
+| Text | `POST /scan/text` | JSON `{ "text": "..." }` |
+| Image | `POST /scan/image/upload` | multipart `file=<image>` |
+| Both | `GET /health` | connection check |
+| Image | `GET /artifacts/download?path=...` | fallback image fetch |
 
 ## Security model
 
@@ -63,7 +81,8 @@ This creates `icons/icon16.png`, `icon48.png`, and `icon128.png`.
 | Network | `localhost:8000` only — no external cloud calls |
 | Storage | No `chrome.storage`, no cookies, no telemetry |
 | Permissions | `activeTab`, `scripting`, `clipboardWrite` + host permissions for LLM sites |
-| Data flow | Text leaves the browser only to your local LeakWatch instance |
+| Data flow | Text/images leave the browser only to your local LeakWatch instance |
+| Image memory | Object URLs revoked after use; no persistent image storage in extension |
 
 ## Troubleshooting
 
@@ -73,7 +92,8 @@ This creates `icons/icon16.png`, `icon48.png`, and `icon128.png`.
 | Request timed out | Check firewall; ensure port 8000 is free |
 | Content script not loaded | Refresh the LLM page after installing the extension |
 | Chat input not found | Click inside the message box, then retry **Send To LLM** |
-| Invalid JSON | Restart the API server after pulling latest code |
+| Image sanitize timeout | Large images with OCR may take up to 2 minutes; wait for completion |
+| Unsupported image format | Use PNG, JPEG, BMP, or WebP only |
 
 ## Updating
 
