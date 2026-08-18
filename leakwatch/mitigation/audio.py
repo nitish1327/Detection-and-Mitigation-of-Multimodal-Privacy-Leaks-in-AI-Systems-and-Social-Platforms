@@ -56,6 +56,7 @@ class AudioMitigator:
         transcript: str,
         entities: list[DetectedEntity],
         output_path: Path,
+        word_timestamps: list[dict[str, Any]] | None = None,
     ) -> tuple[Path, list[dict[str, float]]]:
         source_path = Path(audio_path)
         normalized_path, cleanup_path, fallback_used = self._normalize_for_beeping(source_path)
@@ -71,7 +72,9 @@ class AudioMitigator:
             raise RuntimeError("Audio normalization failed to produce 16-bit PCM WAV frames.")
 
         duration_seconds = frame_count / frame_rate if frame_rate else 0
-        time_ranges = self._ranges_from_entities(transcript, entities, duration_seconds)
+        time_ranges = self._ranges_from_entities(
+            transcript, entities, duration_seconds, word_timestamps=word_timestamps
+        )
 
         samples = array("h")
         samples.frombytes(raw_frames)
@@ -163,6 +166,7 @@ class AudioMitigator:
         transcript: str,
         entities: list[DetectedEntity],
         duration_seconds: float,
+        word_timestamps: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
         if not transcript or not entities or duration_seconds <= 0:
             return []
@@ -187,8 +191,30 @@ class AudioMitigator:
                 continue
             start_char = max(0, min(entity.span.start, transcript_len))
             end_char = max(start_char, min(entity.span.end, transcript_len))
-            start_sec = (start_char / transcript_len) * duration_seconds
-            end_sec = (end_char / transcript_len) * duration_seconds
+
+            start_sec: float | None = None
+            end_sec: float | None = None
+
+            if word_timestamps:
+                matched_words = [
+                    w for w in word_timestamps
+                    if max(int(w.get("char_start", 0)), start_char) < min(int(w.get("char_end", 0)), end_char)
+                ]
+                if not matched_words:
+                    matched_words = [
+                        w for w in word_timestamps
+                        if (start_char <= int(w.get("char_start", 0)) < end_char)
+                        or (start_char < int(w.get("char_end", 0)) <= end_char)
+                    ]
+
+                if matched_words:
+                    start_sec = min(float(w["start"]) for w in matched_words)
+                    end_sec = max(float(w["end"]) for w in matched_words)
+
+            if start_sec is None or end_sec is None:
+                start_sec = (start_char / transcript_len) * duration_seconds
+                end_sec = (end_char / transcript_len) * duration_seconds
+
             if end_sec - start_sec < min_beep:
                 end_sec = min(duration_seconds, start_sec + min_beep)
 

@@ -87,6 +87,7 @@ class PipelineManager:
             transcript,
             detected_entities,
             beeped_audio_path,
+            word_timestamps=getattr(self.audio_adapter, "last_word_timestamps", None),
         )
 
         artifacts: list[Path] = [transcript_path, sanitized_text_path]

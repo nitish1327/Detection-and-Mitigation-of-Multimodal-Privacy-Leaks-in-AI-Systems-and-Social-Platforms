@@ -45,10 +45,12 @@ class AudioAdapter:
 		self._whisper_model_obj: Any | None = None
 		self.last_multi_speaker_detected = False
 		self.last_redaction_confidence = "normal"
+		self.last_word_timestamps: list[dict[str, Any]] = []
 
 	def to_text(self, audio_path: Path) -> str:
 		self.last_multi_speaker_detected = False
 		self.last_redaction_confidence = "normal"
+		self.last_word_timestamps = []
 		path = Path(audio_path)
 		if path.suffix.lower() == self.transcript_extension:
 			return path.read_text(encoding="utf-8")
@@ -71,6 +73,7 @@ class AudioAdapter:
 			result = self._transcriber(audio_path)
 			if isinstance(result, dict):
 				self._update_speaker_flags(result)
+				self.last_word_timestamps = self._extract_word_alignment(result)
 				return str(result.get("text", "")).strip()
 			return str(result).strip()
 
@@ -91,10 +94,58 @@ class AudioAdapter:
 
 		transcript = self._whisper_model_obj.transcribe(str(audio_path), fp16=False, word_timestamps=True)
 		self._update_speaker_flags(transcript)
+		self.last_word_timestamps = self._extract_word_alignment(transcript)
 		text = str(transcript.get("text", "")).strip()
 		if not text:
 			raise RuntimeError(f"Transcription produced empty text for {audio_path.name}")
 		return text
+
+	def _extract_word_alignment(self, transcript_dict: dict[str, Any]) -> list[dict[str, Any]]:
+		if not isinstance(transcript_dict, dict):
+			return []
+		segments = transcript_dict.get("segments") or []
+		if not isinstance(segments, list):
+			return []
+
+		word_alignment: list[dict[str, Any]] = []
+		full_text = str(transcript_dict.get("text", "")).strip()
+		char_cursor = 0
+
+		for segment in segments:
+			if not isinstance(segment, dict):
+				continue
+			segment_words = segment.get("words") or []
+			for w in segment_words:
+				if not isinstance(w, dict):
+					continue
+				word_str = str(w.get("word", ""))
+				start_sec = float(w.get("start", 0.0) or 0.0)
+				end_sec = float(w.get("end", 0.0) or 0.0)
+
+				cleaned_word = word_str.strip()
+				if not cleaned_word:
+					continue
+
+				idx = full_text.lower().find(cleaned_word.lower(), char_cursor)
+				if idx != -1:
+					word_char_start = idx
+					word_char_end = idx + len(cleaned_word)
+					char_cursor = word_char_end
+				else:
+					word_char_start = char_cursor
+					word_char_end = char_cursor + len(cleaned_word)
+					char_cursor = word_char_end
+
+				word_alignment.append({
+					"word": cleaned_word,
+					"raw_word": word_str,
+					"start": start_sec,
+					"end": end_sec,
+					"char_start": word_char_start,
+					"char_end": word_char_end,
+				})
+
+		return word_alignment
 
 	def _update_speaker_flags(self, transcript: dict[str, Any]) -> None:
 		if not transcript:

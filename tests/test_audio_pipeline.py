@@ -379,3 +379,70 @@ def test_multi_speaker_rapid_alternation_flags_reduced_confidence(tmp_path: Path
     audit_payload = json.loads(result.audit_log.read_text(encoding="utf-8"))
     assert audit_payload["multi_speaker_detected"] is True
     assert audit_payload["redaction_confidence"] == "reduced"
+
+
+def test_word_timestamp_precision_beeping(tmp_path: Path) -> None:
+    audio_path = tmp_path / "jane_smith_phone.wav"
+    _write_sine_wave(audio_path, seconds=10.0)
+
+    # 10s audio where speech occurs between 0.5s and 4.2s, followed by trailing silence
+    mock_whisper_payload = {
+        "text": "My name is Jane Smith and my phone number is 9876543210.",
+        "segments": [
+            {
+                "no_speech_prob": 0.0,
+                "words": [
+                    {"word": "My", "start": 0.50, "end": 0.70},
+                    {"word": " name", "start": 0.71, "end": 0.92},
+                    {"word": " is", "start": 0.93, "end": 1.10},
+                    {"word": " Jane", "start": 1.15, "end": 1.55},
+                    {"word": " Smith", "start": 1.56, "end": 2.05},
+                    {"word": " and", "start": 2.10, "end": 2.25},
+                    {"word": " my", "start": 2.26, "end": 2.40},
+                    {"word": " phone", "start": 2.41, "end": 2.70},
+                    {"word": " number", "start": 2.71, "end": 3.05},
+                    {"word": " is", "start": 3.06, "end": 3.20},
+                    {"word": " 9876543210.", "start": 3.25, "end": 4.15},
+                ],
+            }
+        ],
+    }
+
+    config = LeakWatchConfig(
+        app=AppConfig(output_dir=tmp_path / "artifacts"),
+        text=TextConfig(
+            enable_spacy=False,
+            regex_entities=[
+                RegexEntityConfig(name="name", pattern=r"Jane Smith", action="mask"),
+                RegexEntityConfig(name="phone", pattern=r"9876543210", action="mask"),
+            ],
+        ),
+        image=ImageConfig(enable_ocr=False),
+        explainability=ExplainabilityConfig(
+            save_text_spans=True,
+            save_image_overlays=False,
+            audit_log_path=tmp_path / "audit.log",
+        ),
+        audio=AudioConfig(enabled=True, enable_transcription=True, padding_ms=150),
+    )
+
+    manager = PipelineManager(config)
+    manager.audio_adapter._transcriber = lambda _: mock_whisper_payload
+
+    result = manager.process_audio(audio_path)
+
+    beep_map_path = tmp_path / "artifacts" / "jane_smith_phone.audio.beeps.json"
+    assert beep_map_path.exists()
+    beep_ranges = json.loads(beep_map_path.read_text(encoding="utf-8"))
+
+    # Verify we have two beep ranges corresponding to Jane Smith and 9876543210
+    assert len(beep_ranges) == 2
+
+    # "Jane Smith" was spoken at 1.15s - 2.05s. With 150ms padding: 1.00s to 2.20s.
+    assert beep_ranges[0]["start_sec"] == pytest.approx(1.00, abs=0.01)
+    assert beep_ranges[0]["end_sec"] == pytest.approx(2.20, abs=0.01)
+
+    # "9876543210" was spoken at 3.25s - 4.15s. With 150ms padding: 3.10s to 4.30s.
+    assert beep_ranges[1]["start_sec"] == pytest.approx(3.10, abs=0.01)
+    assert beep_ranges[1]["end_sec"] == pytest.approx(4.30, abs=0.01)
+
