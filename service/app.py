@@ -52,6 +52,9 @@ ALLOWED_IMAGE_CONTENT_TYPES = {
     "image/pjpeg",
 }
 
+ALLOWED_AUDIO_SUFFIXES = {".wav", ".mp3", ".m4a", ".aac", ".flac", ".ogg", ".opus"}
+ALLOWED_VIDEO_SUFFIXES = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"}
+
 
 class PolicyConfig(BaseModel):
     """Simple policy knobs for allow/block decisions."""
@@ -181,8 +184,42 @@ def scan_audio(request: FileScanRequest) -> ScanResponse:
     source_path, scratch_dir = _materialize_file(request.path, request.url, suffix=".wav")
     try:
         result = PIPELINE.process_audio(source_path)
-        return _build_response(result, request.policy)
+        response = _build_response(result, request.policy)
+        _attach_download_payload(response, result)
+        return response
     except RuntimeError as exc:  # e.g., modality disabled
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        _cleanup(scratch_dir)
+
+
+@app.post("/scan/audio/upload", response_model=ScanResponse)
+async def scan_audio_upload(file: UploadFile = File(...)) -> ScanResponse:
+    """Accept browser-uploaded audio via multipart/form-data (field name: file)."""
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Audio filename is required.")
+
+    suffix = Path(file.filename).suffix.lower()
+    if suffix not in ALLOWED_AUDIO_SUFFIXES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported audio format '{suffix}'. Allowed: {', '.join(sorted(ALLOWED_AUDIO_SUFFIXES))}",
+        )
+
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="Uploaded audio is empty.")
+
+    scratch_dir = Path(tempfile.mkdtemp(prefix="leakwatch_audio_upload_"))
+    source_path = scratch_dir / f"upload{suffix}"
+    source_path.write_bytes(raw)
+
+    try:
+        result = PIPELINE.process_audio(source_path)
+        response = _build_response(result, PolicyConfig())
+        _attach_download_payload(response, result)
+        return response
+    except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     finally:
         _cleanup(scratch_dir)
@@ -193,7 +230,43 @@ def scan_video(request: FileScanRequest) -> ScanResponse:
     source_path, scratch_dir = _materialize_file(request.path, request.url, suffix=".mp4")
     try:
         result = PIPELINE.process_video(source_path)
-        return _build_response(result, request.policy)
+        response = _build_response(result, request.policy)
+        _attach_download_payload(response, result)
+        return response
+    except VideoProcessingError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        _cleanup(scratch_dir)
+
+
+@app.post("/scan/video/upload", response_model=ScanResponse)
+async def scan_video_upload(file: UploadFile = File(...)) -> ScanResponse:
+    """Accept browser-uploaded video via multipart/form-data (field name: file)."""
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Video filename is required.")
+
+    suffix = Path(file.filename).suffix.lower()
+    if suffix not in ALLOWED_VIDEO_SUFFIXES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported video format '{suffix}'. Allowed: {', '.join(sorted(ALLOWED_VIDEO_SUFFIXES))}",
+        )
+
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="Uploaded video is empty.")
+
+    scratch_dir = Path(tempfile.mkdtemp(prefix="leakwatch_video_upload_"))
+    source_path = scratch_dir / f"upload{suffix}"
+    source_path.write_bytes(raw)
+
+    try:
+        result = PIPELINE.process_video(source_path)
+        response = _build_response(result, PolicyConfig())
+        _attach_download_payload(response, result)
+        return response
     except VideoProcessingError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except RuntimeError as exc:
@@ -262,7 +335,7 @@ def _build_response(result: DetectionResult, policy: PolicyConfig) -> ScanRespon
     )
 
 
-def _attach_image_payload(response: ScanResponse, result: DetectionResult) -> None:
+def _attach_download_payload(response: ScanResponse, result: DetectionResult) -> None:
     response.redacted_entities = _extract_redacted_labels(result)
     if not result.mitigated_output or not result.mitigated_output.exists():
         return
@@ -275,7 +348,12 @@ def _attach_image_payload(response: ScanResponse, result: DetectionResult) -> No
     except ValueError:
         response.download_url = f"/artifacts/download?path={result.mitigated_output.name}"
 
-    response.sanitized_image_base64 = base64.b64encode(mitigated_path.read_bytes()).decode("ascii")
+
+def _attach_image_payload(response: ScanResponse, result: DetectionResult) -> None:
+    _attach_download_payload(response, result)
+    if result.mitigated_output and result.mitigated_output.exists():
+        mitigated_path = result.mitigated_output.resolve()
+        response.sanitized_image_base64 = base64.b64encode(mitigated_path.read_bytes()).decode("ascii")
 
 
 def _extract_redacted_labels(result: DetectionResult) -> list[str]:
