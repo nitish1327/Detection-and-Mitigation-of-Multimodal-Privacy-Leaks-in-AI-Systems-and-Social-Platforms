@@ -23,6 +23,12 @@
       <button id="tab-btn-image" class="tab" type="button" role="tab" aria-selected="false" data-tab="image">
         Image
       </button>
+      <button id="tab-btn-audio" class="tab" type="button" role="tab" aria-selected="false" data-tab="audio">
+        Audio
+      </button>
+      <button id="tab-btn-video" class="tab" type="button" role="tab" aria-selected="false" data-tab="video">
+        Video
+      </button>
     </nav>
 
     <section id="error-panel" class="error-panel hidden" role="alert"></section>
@@ -111,6 +117,76 @@
         <div class="actions">
           <button id="download-btn" type="button" class="btn btn-accent" disabled>
             Download Sanitized Image
+          </button>
+        </div>
+      </section>
+    </div>
+
+    <!-- ==================== AUDIO TAB ==================== -->
+    <div id="tab-audio" class="tab-panel hidden" role="tabpanel">
+      <section class="panel">
+        <label for="audio-input" class="label">Upload audio</label>
+        <input
+          id="audio-input"
+          type="file"
+          accept="audio/wav,audio/mp3,audio/m4a,audio/aac,audio/flac,audio/ogg,audio/opus"
+        />
+        <p class="muted file-hint">Supported: WAV, MP3, M4A, AAC, FLAC, OGG</p>
+        <button id="audio-sanitize-btn" type="button" class="btn btn-primary" disabled>
+          Sanitize Audio
+        </button>
+      </section>
+
+      <section id="audio-preview-panel" class="panel hidden">
+        <h2 class="section-title">Sanitized audio preview</h2>
+        <div class="media-preview-container">
+          <audio id="sanitized-audio" controls class="media-player"></audio>
+        </div>
+
+        <div class="entities-block">
+          <h3 class="section-title">Detected entities</h3>
+          <ul id="audio-entities-list" class="entities-list"></ul>
+          <p id="audio-no-entities" class="muted hidden">No sensitive entities detected.</p>
+        </div>
+
+        <div class="actions">
+          <button id="audio-download-btn" type="button" class="btn btn-accent" disabled>
+            Download Sanitized Audio
+          </button>
+        </div>
+      </section>
+    </div>
+
+    <!-- ==================== VIDEO TAB ==================== -->
+    <div id="tab-video" class="tab-panel hidden" role="tabpanel">
+      <section class="panel">
+        <label for="video-input" class="label">Upload video</label>
+        <input
+          id="video-input"
+          type="file"
+          accept="video/mp4,video/mov,video/avi,video/mkv,video/webm,video/m4v"
+        />
+        <p class="muted file-hint">Supported: MP4, MOV, AVI, MKV, WebM</p>
+        <button id="video-sanitize-btn" type="button" class="btn btn-primary" disabled>
+          Sanitize Video
+        </button>
+      </section>
+
+      <section id="video-preview-panel" class="panel hidden">
+        <h2 class="section-title">Sanitized video preview</h2>
+        <div class="media-preview-container">
+          <video id="sanitized-video" controls class="media-player"></video>
+        </div>
+
+        <div class="entities-block">
+          <h3 class="section-title">Detected entities</h3>
+          <ul id="video-entities-list" class="entities-list"></ul>
+          <p id="video-no-entities" class="muted hidden">No sensitive entities detected.</p>
+        </div>
+
+        <div class="actions">
+          <button id="video-download-btn" type="button" class="btn btn-accent" disabled>
+            Download Sanitized Video
           </button>
         </div>
       </section>

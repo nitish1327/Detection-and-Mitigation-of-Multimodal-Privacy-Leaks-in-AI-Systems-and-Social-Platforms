@@ -3,9 +3,13 @@
 const BACKEND_BASE = "http://localhost:8000";
 const TEXT_SCAN_ENDPOINT = `${BACKEND_BASE}/scan/text`;
 const IMAGE_UPLOAD_ENDPOINT = `${BACKEND_BASE}/scan/image/upload`;
+const AUDIO_UPLOAD_ENDPOINT = `${BACKEND_BASE}/scan/audio/upload`;
+const VIDEO_UPLOAD_ENDPOINT = `${BACKEND_BASE}/scan/video/upload`;
 const HEALTH_ENDPOINT = `${BACKEND_BASE}/health`;
 const TEXT_TIMEOUT_MS = 15000;
 const IMAGE_TIMEOUT_MS = 120000;
+const AUDIO_TIMEOUT_MS = 120000;
+const VIDEO_TIMEOUT_MS = 300000;
 
 const SUPPORTED_IMAGE_TYPES = new Set([
   "image/png",
@@ -14,6 +18,28 @@ const SUPPORTED_IMAGE_TYPES = new Set([
   "image/bmp",
   "image/webp",
   "image/pjpeg",
+]);
+
+const SUPPORTED_AUDIO_TYPES = new Set([
+  "audio/wav",
+  "audio/x-wav",
+  "audio/mp3",
+  "audio/mpeg",
+  "audio/m4a",
+  "audio/mp4",
+  "audio/aac",
+  "audio/flac",
+  "audio/ogg",
+  "audio/opus",
+]);
+
+const SUPPORTED_VIDEO_TYPES = new Set([
+  "video/mp4",
+  "video/quicktime",
+  "video/x-msvideo",
+  "video/x-matroska",
+  "video/webm",
+  "video/m4v",
 ]);
 
 // Shared UI
@@ -41,6 +67,24 @@ const imageEntitiesList = document.getElementById("image-entities-list");
 const imageNoEntities = document.getElementById("image-no-entities");
 const downloadBtn = document.getElementById("download-btn");
 
+// Audio tab
+const audioInput = document.getElementById("audio-input");
+const audioSanitizeBtn = document.getElementById("audio-sanitize-btn");
+const audioPreviewPanel = document.getElementById("audio-preview-panel");
+const sanitizedAudioEl = document.getElementById("sanitized-audio");
+const audioEntitiesList = document.getElementById("audio-entities-list");
+const audioNoEntities = document.getElementById("audio-no-entities");
+const audioDownloadBtn = document.getElementById("audio-download-btn");
+
+// Video tab
+const videoInput = document.getElementById("video-input");
+const videoSanitizeBtn = document.getElementById("video-sanitize-btn");
+const videoPreviewPanel = document.getElementById("video-preview-panel");
+const sanitizedVideoEl = document.getElementById("sanitized-video");
+const videoEntitiesList = document.getElementById("video-entities-list");
+const videoNoEntities = document.getElementById("video-no-entities");
+const videoDownloadBtn = document.getElementById("video-download-btn");
+
 // Tabs
 const tabButtons = document.querySelectorAll(".tab");
 const tabPanels = document.querySelectorAll(".tab-panel");
@@ -52,15 +96,29 @@ let sanitizedImageUrl = null;
 let sanitizedImageBlob = null;
 let sanitizedDownloadName = "sanitized.png";
 
+let selectedAudioFile = null;
+let sanitizedAudioUrl = null;
+let sanitizedAudioBlob = null;
+let sanitizedAudioDownloadName = "sanitized.wav";
+
+let selectedVideoFile = null;
+let sanitizedVideoUrl = null;
+let sanitizedVideoBlob = null;
+let sanitizedVideoDownloadName = "sanitized.mp4";
+
 document.addEventListener("DOMContentLoaded", () => {
   checkBackendHealth();
   initTabs();
   initTextTab();
   initImageTab();
+  initAudioTab();
+  initVideoTab();
 });
 
 window.addEventListener("unload", () => {
   revokeImageUrls();
+  revokeAudioUrls();
+  revokeVideoUrls();
 });
 
 // =============================================================================
@@ -530,3 +588,240 @@ function handleDownloadImage() {
   URL.revokeObjectURL(url);
   clearError();
 }
+
+// =============================================================================
+// Audio tab
+// =============================================================================
+
+function initAudioTab() {
+  audioInput.addEventListener("change", handleAudioSelected);
+  audioSanitizeBtn.addEventListener("click", handleAudioSanitize);
+  audioDownloadBtn.addEventListener("click", handleDownloadAudio);
+}
+
+function revokeAudioUrls() {
+  if (sanitizedAudioUrl) {
+    URL.revokeObjectURL(sanitizedAudioUrl);
+    sanitizedAudioUrl = null;
+  }
+  sanitizedAudioBlob = null;
+}
+
+function handleAudioSelected(event) {
+  clearError();
+  revokeAudioUrls();
+  audioDownloadBtn.disabled = true;
+  sanitizedAudioEl.removeAttribute("src");
+
+  const file = event.target.files?.[0];
+  if (!file) {
+    selectedAudioFile = null;
+    audioSanitizeBtn.disabled = true;
+    audioPreviewPanel.classList.add("hidden");
+    return;
+  }
+
+  selectedAudioFile = file;
+  audioSanitizeBtn.disabled = false;
+  audioPreviewPanel.classList.add("hidden");
+}
+
+async function handleAudioSanitize() {
+  clearError();
+
+  if (!selectedAudioFile) {
+    showError("Select an audio file to sanitize.");
+    return;
+  }
+
+  audioSanitizeBtn.classList.add("loading");
+  audioSanitizeBtn.textContent = "Sanitizing…";
+  audioSanitizeBtn.disabled = true;
+  audioDownloadBtn.disabled = true;
+
+  try {
+    const result = await sanitizeMedia(selectedAudioFile, AUDIO_UPLOAD_ENDPOINT, AUDIO_TIMEOUT_MS);
+    const blob = await resolveSanitizedMediaBlob(result, "audio/wav", AUDIO_TIMEOUT_MS);
+    if (sanitizedAudioUrl) {
+      URL.revokeObjectURL(sanitizedAudioUrl);
+    }
+    sanitizedAudioBlob = blob;
+    sanitizedAudioUrl = URL.createObjectURL(blob);
+    sanitizedAudioEl.src = sanitizedAudioUrl;
+
+    const stem = selectedAudioFile.name.replace(/\.[^.]+$/, "");
+    sanitizedAudioDownloadName = `${stem}.sanitized.wav`;
+
+    renderEntityList(
+      audioEntitiesList,
+      audioNoEntities,
+      result.redacted_entities || extractEntityLabels(result.entities)
+    );
+
+    audioPreviewPanel.classList.remove("hidden");
+    audioDownloadBtn.disabled = false;
+    setBackendStatus("ok");
+  } catch (error) {
+    showError(error.message);
+    setBackendStatus("error");
+  } finally {
+    audioSanitizeBtn.classList.remove("loading");
+    audioSanitizeBtn.textContent = "Sanitize Audio";
+    audioSanitizeBtn.disabled = !selectedAudioFile;
+  }
+}
+
+function handleDownloadAudio() {
+  if (!sanitizedAudioBlob) {
+    showError("Nothing to download. Sanitize an audio file first.");
+    return;
+  }
+
+  const url = URL.createObjectURL(sanitizedAudioBlob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = sanitizedAudioDownloadName;
+  anchor.click();
+  URL.revokeObjectURL(url);
+  clearError();
+}
+
+// =============================================================================
+// Video tab
+// =============================================================================
+
+function initVideoTab() {
+  videoInput.addEventListener("change", handleVideoSelected);
+  videoSanitizeBtn.addEventListener("click", handleVideoSanitize);
+  videoDownloadBtn.addEventListener("click", handleDownloadVideo);
+}
+
+function revokeVideoUrls() {
+  if (sanitizedVideoUrl) {
+    URL.revokeObjectURL(sanitizedVideoUrl);
+    sanitizedVideoUrl = null;
+  }
+  sanitizedVideoBlob = null;
+}
+
+function handleVideoSelected(event) {
+  clearError();
+  revokeVideoUrls();
+  videoDownloadBtn.disabled = true;
+  sanitizedVideoEl.removeAttribute("src");
+
+  const file = event.target.files?.[0];
+  if (!file) {
+    selectedVideoFile = null;
+    videoSanitizeBtn.disabled = true;
+    videoPreviewPanel.classList.add("hidden");
+    return;
+  }
+
+  selectedVideoFile = file;
+  videoSanitizeBtn.disabled = false;
+  videoPreviewPanel.classList.add("hidden");
+}
+
+async function handleVideoSanitize() {
+  clearError();
+
+  if (!selectedVideoFile) {
+    showError("Select a video file to sanitize.");
+    return;
+  }
+
+  videoSanitizeBtn.classList.add("loading");
+  videoSanitizeBtn.textContent = "Sanitizing…";
+  videoSanitizeBtn.disabled = true;
+  videoDownloadBtn.disabled = true;
+
+  try {
+    const result = await sanitizeMedia(selectedVideoFile, VIDEO_UPLOAD_ENDPOINT, VIDEO_TIMEOUT_MS);
+    const blob = await resolveSanitizedMediaBlob(result, "video/mp4", VIDEO_TIMEOUT_MS);
+    if (sanitizedVideoUrl) {
+      URL.revokeObjectURL(sanitizedVideoUrl);
+    }
+    sanitizedVideoBlob = blob;
+    sanitizedVideoUrl = URL.createObjectURL(blob);
+    sanitizedVideoEl.src = sanitizedVideoUrl;
+
+    const stem = selectedVideoFile.name.replace(/\.[^.]+$/, "");
+    sanitizedVideoDownloadName = `${stem}.sanitized.mp4`;
+
+    renderEntityList(
+      videoEntitiesList,
+      videoNoEntities,
+      result.redacted_entities || extractEntityLabels(result.entities)
+    );
+
+    videoPreviewPanel.classList.remove("hidden");
+    videoDownloadBtn.disabled = false;
+    setBackendStatus("ok");
+  } catch (error) {
+    showError(error.message);
+    setBackendStatus("error");
+  } finally {
+    videoSanitizeBtn.classList.remove("loading");
+    videoSanitizeBtn.textContent = "Sanitize Video";
+    videoSanitizeBtn.disabled = !selectedVideoFile;
+  }
+}
+
+function handleDownloadVideo() {
+  if (!sanitizedVideoBlob) {
+    showError("Nothing to download. Sanitize a video file first.");
+    return;
+  }
+
+  const url = URL.createObjectURL(sanitizedVideoBlob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = sanitizedVideoDownloadName;
+  anchor.click();
+  URL.revokeObjectURL(url);
+  clearError();
+}
+
+// Shared media helper functions
+async function sanitizeMedia(file, endpoint, timeoutMs) {
+  const formData = new FormData();
+  formData.append("file", file, file.name);
+
+  const response = await fetchWithTimeout(
+    endpoint,
+    { method: "POST", body: formData },
+    timeoutMs
+  );
+
+  const payload = await parseJsonResponse(response);
+
+  if (!response.ok) {
+    const detail = payload.detail || payload.message || response.statusText;
+    throw new Error(`Sanitization failed (${response.status}): ${detail}`);
+  }
+
+  return payload;
+}
+
+async function resolveSanitizedMediaBlob(payload, defaultMimeType, timeoutMs) {
+  const downloadPath = payload.download_url || artifactDownloadPath(payload.mitigated_output);
+  if (!downloadPath) {
+    throw new Error("No download URL available for sanitized output.");
+  }
+
+  const url = downloadPath.startsWith("http")
+    ? downloadPath
+    : `${BACKEND_BASE}${downloadPath.startsWith("/") ? "" : "/"}${downloadPath}`;
+
+  const response = await fetchWithTimeout(url, { method: "GET" }, timeoutMs);
+  if (!response.ok) {
+    throw new Error(`Failed to download sanitized file (${response.status}).`);
+  }
+  const blob = await response.blob();
+  if (!blob || blob.size === 0) {
+    throw new Error("Downloaded sanitized file is empty.");
+  }
+  return new Blob([blob], { type: defaultMimeType });
+}
+
