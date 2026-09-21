@@ -8,6 +8,7 @@ build/
 *.egg-info/
 ffmpeg.exe
 scratch/
+tmp/
 # artifacts/ is now allowed for demo purposes
 # samples/ is allowed
 !artifacts/*.wav
