@@ -1,5 +1,5 @@
 Detected sensitive spans:
 
-- email | mitigation=mask | span=(12, 36)
-  original : abc@gmail.com
-  sanitized: garciabrenda@example.org
+- CARDINAL | mitigation=replace | span=(4, 10)
+  original : 567
+  sanitized: 992778

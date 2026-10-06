@@ -1,5 +1,8 @@
 Detected sensitive spans:
 
-- phone | mitigation=mask | span=(63, 79)
+- PERSON | mitigation=replace | span=(29, 45)
+  original : Devriyaprabha
+  sanitized: April Hutchinson
+- phone_numbers | mitigation=mask | span=(66, 83)
   original : 8123456789
-  sanitized: [REDACTED:PHONE]
+  sanitized: 608-667-7665x2382
