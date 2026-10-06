@@ -63,6 +63,18 @@ tests/
   D:/Capstone/.venv/Scripts/python.exe -m leakwatch scan-folder data/uploads
   ```
 
+## Interactive Video Face Blur
+We've added a powerful new utility for selective video anonymization with occlusion recovery and audio preservation.
+Run it via:
+```powershell
+python scripts/selective_face_blur.py --video samples/video/Video1.mp4
+```
+**Features:**
+- **Interactive GUI**: Pops up a window to let you click which face(s) to blur.
+- **Multi-face Selection**: Track and blur multiple people simultaneously.
+- **Inverted Blur Mode (`--blur-all-except`)**: Blur everyone in the video *except* the selected target(s).
+- **Edge Coasting**: Smoothly handles subjects walking off-screen.
+
 ### Sample Media Assets
 - Audio: `samples/audio/demo_call.wav` (plus transcript `demo_call.txt`) demonstrates the `scan-audio` flow. For real phone recordings, LeakWatch can:
   - use companion transcript if present (`<name>.txt`), or
