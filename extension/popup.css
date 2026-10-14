@@ -614,3 +614,40 @@ input[type="file"]::file-selector-button {
   width: 100%;
 }
 
+.sensitive-info-banner {
+  background: rgba(30, 144, 255, 0.08);
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  border-radius: var(--radius);
+  padding: 10px;
+  margin-bottom: 12px;
+}
+
+.shield-badge {
+  font-size: 12px;
+  font-weight: 700;
+  color: #38bdf8;
+  display: inline-block;
+  margin-bottom: 4px;
+}
+
+.banner-text {
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.4;
+  margin-bottom: 8px;
+}
+
+.checkbox-inline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.checkbox-inline input[type="checkbox"] {
+  cursor: pointer;
+}
+

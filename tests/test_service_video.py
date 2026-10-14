@@ -121,3 +121,27 @@ def test_selective_video_endpoint_multipart() -> None:
     data = response.json()
     assert data["status"] == "success"
     assert data["faces_blurred"] == 1
+
+
+def test_selective_video_endpoint_blur_all() -> None:
+    video_path = Path("samples/video/Video1.mp4")
+    if not video_path.exists():
+        return
+
+    client = TestClient(service_app.app)
+    response = client.post(
+        "/scan/video/selective",
+        json={
+            "path": str(video_path),
+            "selected_faces": [],
+            "mode": "blur_all",
+            "blur_strength": 51,
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "success"
+    assert data["mode"] == "blur_all"
+    assert data["faces_blurred"] == data["faces_detected"]
+    assert "download_url" in data

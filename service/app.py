@@ -281,14 +281,36 @@ async def scan_video_upload(file: UploadFile = File(...)) -> ScanResponse:
     source_path.write_bytes(raw)
 
     try:
-        result = PIPELINE.process_video(source_path)
-        response = _build_response(result, PolicyConfig())
-        _attach_download_payload(response, result)
-        return response
-    except VideoProcessingError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        output_dir = Path(CONFIG.app.output_dir).resolve()
+        output_dir.mkdir(parents=True, exist_ok=True)
+        unique_name = f"{source_path.stem}.sanitized_{uuid.uuid4().hex[:8]}.mp4"
+        output_path = output_dir / unique_name
+
+        res = process_selective_video(
+            source_video_path=source_path,
+            output_path=output_path,
+            selected_face_ids=[],
+            mode="blur_all",
+            blur_strength=51,
+            redact_sensitive_info=True,
+        )
+
+        relative_download_url = f"/artifacts/download?path={output_path.name}"
+        redacted_entities = res.get("redacted_entities", ["FACE"])
+
+        return ScanResponse(
+            status="success",
+            decision="allow",
+            reason=None,
+            sanitized_text=None,
+            redacted_entities=redacted_entities,
+            artifacts=[str(output_path)],
+            download_url=relative_download_url,
+            audit_log=f"Full video sanitization applied. Frames: {res.get('total_frames', 0)}. Entities: {redacted_entities}",
+            mitigated_output=str(output_path),
+        )
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail=f"Video processing failed: {exc}") from exc
     finally:
         _cleanup(scratch_dir)
 
@@ -387,6 +409,7 @@ async def scan_video_selective(request: Request) -> dict[str, Any]:
     selected_faces: list[int] = []
     mode: str = "blur_selected"
     blur_strength: int = 51
+    redact_sensitive_info: bool = True
 
     try:
         if "multipart/form-data" in content_type:
@@ -415,6 +438,8 @@ async def scan_video_selective(request: Request) -> dict[str, Any]:
 
             selected_faces = _parse_face_selection(form.get("selected_faces"))
             mode = str(form.get("mode", "blur_selected")).strip()
+            if "redact_sensitive_info" in form:
+                redact_sensitive_info = str(form.get("redact_sensitive_info", "true")).lower() in ("true", "1", "yes")
             try:
                 blur_strength = int(form.get("blur_strength", 51))
             except (ValueError, TypeError):
@@ -430,6 +455,8 @@ async def scan_video_selective(request: Request) -> dict[str, Any]:
             source_path, scratch_dir = _materialize_file(path_val, url_val, suffix=".mp4")
             selected_faces = _parse_face_selection(body.get("selected_faces"))
             mode = str(body.get("mode", "blur_selected")).strip()
+            if "redact_sensitive_info" in body:
+                redact_sensitive_info = bool(body.get("redact_sensitive_info"))
             try:
                 blur_strength = int(body.get("blur_strength", 51))
             except (ValueError, TypeError):
@@ -448,10 +475,12 @@ async def scan_video_selective(request: Request) -> dict[str, Any]:
                 selected_faces = _parse_face_selection(form.get("selected_faces"))
                 mode = str(form.get("mode", "blur_selected")).strip()
                 blur_strength = int(form.get("blur_strength", 51))
+                if "redact_sensitive_info" in form:
+                    redact_sensitive_info = str(form.get("redact_sensitive_info", "true")).lower() in ("true", "1", "yes")
             else:
                 raise HTTPException(status_code=400, detail="Provide a video file upload or JSON with path/url.")
 
-        if mode not in ("blur_selected", "blur_all_except"):
+        if mode not in ("blur_selected", "blur_all_except", "blur_all"):
             mode = "blur_selected"
 
         output_dir = Path(CONFIG.app.output_dir).resolve()
@@ -465,6 +494,7 @@ async def scan_video_selective(request: Request) -> dict[str, Any]:
             selected_face_ids=selected_faces,
             mode=mode,
             blur_strength=blur_strength,
+            redact_sensitive_info=redact_sensitive_info,
         )
 
         relative_download_url = f"/artifacts/download?path={output_path.name}"
@@ -478,7 +508,7 @@ async def scan_video_selective(request: Request) -> dict[str, Any]:
             }
             for fid in res.get("target_face_ids", [])
         ]
-        redacted_entities = ["FACE"] if entities else []
+        redacted_entities = res.get("redacted_entities", ["FACE"] if entities else [])
         audit_log = (
             f"Selective face blur applied. Mode: {mode}. Selected IDs: {selected_faces}. "
             f"Blurred face IDs: {res.get('target_face_ids', [])}. Frames processed: {res.get('total_frames', 0)}."

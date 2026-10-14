@@ -193,6 +193,20 @@
         <!-- Face selector grid -->
         <div id="video-face-grid" class="face-grid"></div>
 
+        <!-- Sensitive Information Detected Banner -->
+        <div id="video-sensitive-info-banner" class="sensitive-info-banner hidden">
+          <div class="banner-header">
+            <span class="shield-badge">🛡️ Sensitive PII Detected</span>
+          </div>
+          <p id="video-sensitive-info-text" class="banner-text">
+            Sensitive data found in video frames.
+          </p>
+          <label class="checkbox-inline">
+            <input type="checkbox" id="video-redact-sensitive-toggle" checked />
+            <span>Redact sensitive text & credentials with realistic synthetic Faker data</span>
+          </label>
+        </div>
+
         <!-- Mode Radio Toggle -->
         <div class="control-group">
           <span class="label">Mitigation Mode</span>

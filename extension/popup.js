@@ -781,6 +781,19 @@ async function handleVideoSelected(event) {
 
     renderFaceGrid(detectedVideoFaces);
 
+    const sensitiveEntities = data.sensitive_entities || [];
+    const sensitiveBanner = document.getElementById("video-sensitive-info-banner");
+    const sensitiveText = document.getElementById("video-sensitive-info-text");
+    if (sensitiveBanner && sensitiveText) {
+      if (sensitiveEntities.length > 0) {
+        const uniqueLabels = Array.from(new Set(sensitiveEntities.map((e) => (e.label || "").toUpperCase()))).join(", ");
+        sensitiveText.textContent = `Detected ${sensitiveEntities.length} sensitive item(s) (${uniqueLabels}). Redacting with synthetic Faker data.`;
+        sensitiveBanner.classList.remove("hidden");
+      } else {
+        sensitiveBanner.classList.add("hidden");
+      }
+    }
+
     if (videoFaceSelectionPanel) {
       videoFaceSelectionPanel.classList.remove("hidden");
     }
@@ -893,7 +906,7 @@ function renderFaceGrid(faces) {
   });
 }
 
-async function handleSelectiveSanitize() {
+async function handleSelectiveSanitize(options = {}) {
   clearError();
 
   if (!selectedVideoFile) {
@@ -901,18 +914,23 @@ async function handleSelectiveSanitize() {
     return;
   }
 
+  const isBlurAll = Boolean(options && options.blurAll);
   const modeRadio = document.querySelector('input[name="video-mode"]:checked');
-  const mode = modeRadio ? modeRadio.value : "blur_selected";
+  const mode = isBlurAll ? "blur_all" : (modeRadio ? modeRadio.value : "blur_selected");
   const blurStrength = videoBlurStrengthSlider ? videoBlurStrengthSlider.value : 51;
-  const faceIdsArray = Array.from(selectedFaceIds);
+  const faceIdsArray = isBlurAll ? [] : Array.from(selectedFaceIds);
 
   if (mode === "blur_selected" && faceIdsArray.length === 0) {
     showError("Please select at least one face, or choose 'Blur all except selected', or click 'Blur Everything'.");
     return;
   }
 
-  videoApplySelectiveBtn.classList.add("loading");
-  videoApplySelectiveBtn.textContent = "Sanitizing…";
+  const redactToggle = document.getElementById("video-redact-sensitive-toggle");
+  const redactSensitive = redactToggle ? redactToggle.checked : true;
+
+  const activeBtn = isBlurAll ? videoSanitizeBtn : videoApplySelectiveBtn;
+  activeBtn.classList.add("loading");
+  activeBtn.textContent = "Sanitizing…";
   videoApplySelectiveBtn.disabled = true;
   videoSanitizeBtn.disabled = true;
   videoDownloadBtn.disabled = true;
@@ -923,6 +941,7 @@ async function handleSelectiveSanitize() {
     formData.append("selected_faces", JSON.stringify(faceIdsArray));
     formData.append("mode", mode);
     formData.append("blur_strength", String(blurStrength));
+    formData.append("redact_sensitive_info", redactSensitive ? "true" : "false");
 
     const response = await fetchWithTimeout(
       VIDEO_SELECTIVE_ENDPOINT,
@@ -962,56 +981,15 @@ async function handleSelectiveSanitize() {
   } finally {
     videoApplySelectiveBtn.classList.remove("loading");
     videoApplySelectiveBtn.textContent = "Apply Selective Sanitization";
+    videoSanitizeBtn.classList.remove("loading");
+    videoSanitizeBtn.textContent = "Blur Everything (Blanket Blur)";
     videoApplySelectiveBtn.disabled = !selectedVideoFile;
     videoSanitizeBtn.disabled = !selectedVideoFile;
   }
 }
 
 async function handleVideoSanitize() {
-  clearError();
-
-  if (!selectedVideoFile) {
-    showError("Select a video file to sanitize.");
-    return;
-  }
-
-  videoSanitizeBtn.classList.add("loading");
-  videoSanitizeBtn.textContent = "Sanitizing…";
-  videoSanitizeBtn.disabled = true;
-  if (videoApplySelectiveBtn) videoApplySelectiveBtn.disabled = true;
-  videoDownloadBtn.disabled = true;
-
-  try {
-    const result = await sanitizeMedia(selectedVideoFile, VIDEO_UPLOAD_ENDPOINT, VIDEO_TIMEOUT_MS);
-    const blob = await resolveSanitizedMediaBlob(result, "video/mp4", VIDEO_TIMEOUT_MS);
-    if (sanitizedVideoUrl) {
-      URL.revokeObjectURL(sanitizedVideoUrl);
-    }
-    sanitizedVideoBlob = blob;
-    sanitizedVideoUrl = URL.createObjectURL(blob);
-    sanitizedVideoEl.src = sanitizedVideoUrl;
-
-    const stem = selectedVideoFile.name.replace(/\.[^.]+$/, "");
-    sanitizedVideoDownloadName = `${stem}.sanitized.mp4`;
-
-    renderEntityList(
-      videoEntitiesList,
-      videoNoEntities,
-      result.redacted_entities || extractEntityLabels(result.entities)
-    );
-
-    videoPreviewPanel.classList.remove("hidden");
-    videoDownloadBtn.disabled = false;
-    setBackendStatus("ok");
-  } catch (error) {
-    showError(error.message);
-    setBackendStatus("error");
-  } finally {
-    videoSanitizeBtn.classList.remove("loading");
-    videoSanitizeBtn.textContent = "Blur Everything";
-    videoSanitizeBtn.disabled = !selectedVideoFile;
-    if (videoApplySelectiveBtn) videoApplySelectiveBtn.disabled = !selectedVideoFile;
-  }
+  return handleSelectiveSanitize({ blurAll: true });
 }
 
 function handleDownloadVideo() {

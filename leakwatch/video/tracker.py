@@ -270,6 +270,203 @@ def blur_region(
     return frame
 
 
+def generate_synthetic_replacement(label: str, orig_text: str | None = None) -> str:
+    """Generate realistic fake text for a sensitive entity label."""
+    lbl = (label or "").lower()
+    orig = (orig_text or "").strip()
+
+    if any(k in lbl for k in ("id", "roll", "license", "cardinal", "number")):
+        if orig and any(c.isalpha() for c in orig) and any(c.isdigit() for c in orig):
+            prefix = "".join(c for c in orig if c.isalpha())[:4] or "ID"
+            digits = "".join(c for c in orig if c.isdigit())[:6] or "202401"
+            mutated = "".join(str((int(d) + 3) % 10) for d in digits)
+            return f"{prefix}{mutated}"
+        if orig and orig.isdigit():
+            return "".join(str((int(d) + 5) % 10) for d in orig)
+        return "PES2UG22CS999"
+
+    if "aadhar" in lbl:
+        return "XXXX XXXX 4821"
+
+    if any(k in lbl for k in ("person", "name")):
+        return "ADITYA SHARMA"
+
+    if any(k in lbl for k in ("institution", "org")):
+        if "univ" in orig.lower():
+            return "NATIONAL UNIVERSITY"
+        if "pes" in orig.lower():
+            return "APEX"
+        return "INSTITUTE"
+
+    if "phone" in lbl:
+        return "+91 98765 43210"
+
+    if any(k in lbl for k in ("credit", "bank", "account", "money")):
+        return "4532 **** **** 8821"
+
+    if any(k in lbl for k in ("address", "street", "location", "gpe")):
+        return "123 MG Road, Bengaluru"
+
+    if "email" in lbl:
+        return "contact@example.org"
+
+    return "CONFIDENTIAL"
+
+
+def render_synthetic_text(
+    frame: np.ndarray,
+    x: int,
+    y: int,
+    w: int,
+    h: int,
+    orig_text: str,
+    fake_text: str,
+) -> np.ndarray:
+    """Inpaint original sensitive text and render crisp synthetic replacement text."""
+    fh, fw = frame.shape[:2]
+    x1 = max(0, int(x))
+    y1 = max(0, int(y))
+    x2 = min(fw, int(x + w))
+    y2 = min(fh, int(y + h))
+    if x2 <= x1 or y2 <= y1 or (x2 - x1) < 4 or (y2 - y1) < 4:
+        return frame
+
+    roi = frame[y1:y2, x1:x2]
+    rh, rw = roi.shape[:2]
+
+    # Background color detection from border pixels
+    border = np.concatenate([roi[0, :], roi[-1, :], roi[:, 0], roi[:, -1]])
+    bg_color = np.median(border, axis=0).astype(np.uint8).tolist()
+    is_light_bg = float(np.mean(bg_color)) > 127.0
+    text_color = (25, 25, 25) if is_light_bg else (235, 235, 235)
+
+    # Inpaint original text
+    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    if is_light_bg:
+        _, inpaint_mask = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    else:
+        _, inpaint_mask = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+    inpaint_mask = cv2.dilate(inpaint_mask, kernel, iterations=2)
+    erased = cv2.inpaint(roi, inpaint_mask, inpaintRadius=5, flags=cv2.INPAINT_TELEA)
+
+    # Feathered background fill in center
+    margin = max(2, min(rh, rw) // 12)
+    fill_region = np.full_like(erased, bg_color, dtype=np.uint8)
+    blend_mask = np.zeros((rh, rw), dtype=np.float32)
+    blend_mask[margin:rh - margin, margin:rw - margin] = 1.0
+    ksize = margin * 2 + 1
+    blend_mask = cv2.GaussianBlur(blend_mask, (ksize, ksize), 0)
+    blend_3ch = cv2.merge([blend_mask, blend_mask, blend_mask])
+    erased = (
+        fill_region.astype(np.float32) * blend_3ch
+        + erased.astype(np.float32) * (1.0 - blend_3ch)
+    ).clip(0, 255).astype(np.uint8)
+
+    # Render synthetic text at matching scale
+    font = cv2.FONT_HERSHEY_DUPLEX
+    target_w = int(rw * 0.90)
+    target_h = int(rh * 0.70)
+    ref_text = orig_text if orig_text else fake_text
+
+    lo, hi = 0.1, 4.0
+    scale = 0.5
+    for _ in range(15):
+        mid = (lo + hi) / 2.0
+        ts = cv2.getTextSize(ref_text, font, mid, max(1, int(mid)))[0]
+        if ts[0] <= target_w and ts[1] <= target_h:
+            scale = mid
+            lo = mid
+        else:
+            hi = mid
+
+    thickness = max(1, int(scale))
+    text_size = cv2.getTextSize(fake_text, font, scale, thickness)[0]
+    if text_size[0] > target_w:
+        scale = max(0.2, scale * (target_w / max(1, text_size[0])))
+        thickness = max(1, int(scale))
+        text_size = cv2.getTextSize(fake_text, font, scale, thickness)[0]
+
+    text_x = max(2, (rw - text_size[0]) // 2)
+    text_y = max(rh - 2, (rh + text_size[1]) // 2)
+    cv2.putText(erased, fake_text, (text_x, text_y), font, scale, text_color, thickness, cv2.LINE_AA)
+
+    frame[y1:y2, x1:x2] = erased
+    return frame
+
+
+class SensitiveTextTracker:
+    """Tracks a sensitive text region across frames and applies synthetic Faker text."""
+
+    def __init__(
+        self,
+        x: int,
+        y: int,
+        w: int,
+        h: int,
+        label: str,
+        orig_text: str,
+        fake_text: str,
+        initial_frame: np.ndarray,
+    ):
+        self.x = int(x)
+        self.y = int(y)
+        self.w = int(w)
+        self.h = int(h)
+        self.label = label
+        self.orig_text = orig_text
+        self.fake_text = fake_text
+        self.lost_frames = 0
+
+        fh, fw = initial_frame.shape[:2]
+        cx1 = max(0, self.x)
+        cy1 = max(0, self.y)
+        cx2 = min(fw, self.x + self.w)
+        cy2 = min(fh, self.y + self.h)
+        self.template = (
+            initial_frame[cy1:cy2, cx1:cx2].copy()
+            if (cx2 > cx1 and cy2 > cy1)
+            else None
+        )
+
+    def update(self, frame: np.ndarray) -> tuple[int, int, int, int] | None:
+        fh, fw = frame.shape[:2]
+        if self.template is None or self.template.size == 0:
+            return (self.x, self.y, self.w, self.h)
+
+        search_pad = 35
+        sx1 = max(0, self.x - search_pad)
+        sy1 = max(0, self.y - search_pad)
+        sx2 = min(fw, self.x + self.w + search_pad)
+        sy2 = min(fh, self.y + self.h + search_pad)
+
+        th, tw = self.template.shape[:2]
+        if (sx2 - sx1) < tw or (sy2 - sy1) < th:
+            return (self.x, self.y, self.w, self.h)
+
+        search_roi = frame[sy1:sy2, sx1:sx2]
+        res = cv2.matchTemplate(search_roi, self.template, cv2.TM_CCOEFF_NORMED)
+        _, max_val, _, max_loc = cv2.minMaxLoc(res)
+
+        if max_val > 0.45:
+            self.x = sx1 + max_loc[0]
+            self.y = sy1 + max_loc[1]
+            self.lost_frames = 0
+        else:
+            self.lost_frames += 1
+
+        if self.lost_frames > 45:
+            return None
+
+        return (self.x, self.y, self.w, self.h)
+
+    def apply(self, frame: np.ndarray) -> np.ndarray:
+        return render_synthetic_text(
+            frame, self.x, self.y, self.w, self.h, self.orig_text, self.fake_text
+        )
+
+
 def find_ffmpeg() -> str | None:
     """Locate ffmpeg executable across system PATH, imageio_ffmpeg, and local shims."""
     system = shutil.which("ffmpeg")
@@ -327,8 +524,26 @@ def reconstruct_with_audio(
     return output_path
 
 
+_VIDEO_SENSITIVE_ENTITIES_CACHE: dict[str, list[dict[str, Any]]] = {}
+
+
+def _video_fingerprint(video_path: Path | str) -> str:
+    p = Path(video_path)
+    if not p.exists():
+        return ""
+    try:
+        import hashlib
+        size = p.stat().st_size
+        with open(p, "rb") as f:
+            head = f.read(8192)
+        h = hashlib.sha256(head).hexdigest()[:16]
+        return f"{size}_{h}"
+    except Exception:
+        return str(p)
+
+
 def generate_video_face_preview(video_path: Path | str) -> dict[str, Any]:
-    """Inspect first valid frame, detect faces with YuNet, and generate preview payload."""
+    """Inspect first valid frame, detect faces with YuNet and sensitive text, and generate preview payload."""
     path = Path(video_path)
     if not path.exists():
         raise FileNotFoundError(f"Video file not found: {video_path}")
@@ -389,6 +604,64 @@ def generate_video_face_preview(video_path: Path | str) -> dict[str, Any]:
             "thumbnail_base64": thumb_b64,
         })
 
+    # Detect sensitive text & document entities in first frame
+    sensitive_items: list[dict[str, Any]] = []
+    try:
+        from ..detection.image import ImageDetector
+        from ..utils.config import ImageConfig
+
+        img_cfg = ImageConfig()
+        img_detector = ImageDetector(img_cfg)
+        detected_entities = img_detector.detect_frame(first_frame)
+
+        s_idx = 1
+        for ent in detected_entities:
+            if not ent.bbox:
+                continue
+            lbl = ent.label.lower()
+            txt = (ent.text or "").strip()
+            # Skip pure face entities since they are in faces list
+            if lbl in {"face", "person"} and not txt:
+                continue
+            # Exclude known geographic words from desk mats / map backgrounds
+            if txt.lower() in {
+                "ocean", "atlantic", "pacific", "indian", "arctic", "south", "north",
+                "east", "west", "africa", "asia", "europe", "america", "sea", "bay",
+                "lat", "lon", "gmt", "utc", "equator", "tropic", "meridian",
+            }:
+                continue
+
+            bx, by, bw, bh = int(ent.bbox.x), int(ent.bbox.y), int(ent.bbox.width), int(ent.bbox.height)
+            if bw < 8 or bh < 6:
+                continue
+
+            fake_txt = generate_synthetic_replacement(ent.label, txt)
+            sensitive_items.append({
+                "id": s_idx,
+                "label": ent.label,
+                "text": txt,
+                "fake_text": fake_txt,
+                "x": bx,
+                "y": by,
+                "w": bw,
+                "h": bh,
+                "bbox": [bx, by, bw, bh],
+            })
+            s_idx += 1
+
+            # Draw preview box on annotated image
+            cv2.rectangle(annotated, (bx, by), (bx + bw, by + bh), (255, 200, 0), 2)
+            tag = f"[{ent.label.upper()}]"
+            (tw, th), _ = cv2.getTextSize(tag, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
+            cv2.rectangle(annotated, (bx, max(0, by - th - 6)), (bx + tw + 4, by), (255, 200, 0), -1)
+            cv2.putText(annotated, tag, (bx + 2, max(th, by - 3)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 0), 1)
+    except Exception as exc:
+        LOGGER.warning("Sensitive entity detection on video preview: %s", exc)
+
+    fp = _video_fingerprint(path)
+    if fp:
+        _VIDEO_SENSITIVE_ENTITIES_CACHE[fp] = sensitive_items
+
     # Encode annotated frame preview
     ok_prev, buf_prev = cv2.imencode(".jpg", annotated)
     preview_b64 = base64.b64encode(buf_prev).decode("ascii") if ok_prev else ""
@@ -398,6 +671,8 @@ def generate_video_face_preview(video_path: Path | str) -> dict[str, Any]:
         "preview_image_base64": preview_b64,
         "annotated_frame_base64": preview_b64,
         "faces": face_items,
+        "sensitive_entities": sensitive_items,
+        "sensitive_entity_count": len(sensitive_items),
         "video_info": {
             "width": width,
             "height": height,
@@ -413,9 +688,10 @@ def process_selective_video(
     selected_face_ids: Sequence[int],
     mode: str = "blur_selected",
     blur_strength: int = 51,
+    redact_sensitive_info: bool = True,
     end_frame: int | None = None,
 ) -> dict[str, Any]:
-    """Track and blur selected faces across all frames, preserving audio via ffmpeg."""
+    """Track and blur selected faces across all frames and replace sensitive text with Faker."""
     video_path = Path(source_video_path)
     output_path = Path(output_path)
     if not video_path.exists():
@@ -443,12 +719,14 @@ def process_selective_video(
 
     # Determine faces to blur based on 1-indexed IDs and mode
     selected_set = {int(x) for x in selected_face_ids}
-    if mode == "blur_all_except":
+    if mode == "blur_all":
+        target_faces = list(faces)
+        target_ids = list(range(1, len(faces) + 1))
+    elif mode == "blur_all_except":
         target_faces = [face for i, face in enumerate(faces) if (i + 1) not in selected_set]
         target_ids = [i + 1 for i, _ in enumerate(faces) if (i + 1) not in selected_set]
     else:  # "blur_selected"
         if not selected_set:
-            # If blur_selected is specified but list is empty, default to blurring none or all?
             target_faces = []
             target_ids = []
         else:
@@ -456,6 +734,57 @@ def process_selective_video(
             target_ids = [i + 1 for i, _ in enumerate(faces) if (i + 1) in selected_set]
 
     trackers = [FaceTracker(face, width, height) for face in target_faces]
+    redacted_labels: set[str] = set()
+    if target_faces:
+        redacted_labels.add("FACE")
+
+    # Initialize sensitive text / ID info trackers
+    text_trackers: list[SensitiveTextTracker] = []
+    if redact_sensitive_info:
+        fp = _video_fingerprint(video_path)
+        cached_items = _VIDEO_SENSITIVE_ENTITIES_CACHE.get(fp) if fp else None
+        if cached_items:
+            LOGGER.info("Reusing %d cached sensitive entities from preview for %s", len(cached_items), video_path.name)
+            for item in cached_items:
+                bx, by, bw, bh = item["bbox"]
+                text_trackers.append(
+                    SensitiveTextTracker(bx, by, bw, bh, item["label"], item["text"], item["fake_text"], first_frame)
+                )
+                redacted_labels.add(item["label"].upper())
+        else:
+            try:
+                from ..detection.image import ImageDetector
+                from ..utils.config import ImageConfig
+
+                img_cfg = ImageConfig()
+                img_detector = ImageDetector(img_cfg)
+                initial_entities = img_detector.detect_frame(first_frame)
+
+                for ent in initial_entities:
+                    if not ent.bbox:
+                        continue
+                    lbl = ent.label.lower()
+                    txt = (ent.text or "").strip()
+                    if lbl in {"face", "person"} and not txt:
+                        continue
+                    if txt.lower() in {
+                        "ocean", "atlantic", "pacific", "indian", "arctic", "south", "north",
+                        "east", "west", "africa", "asia", "europe", "america", "sea", "bay",
+                        "lat", "lon", "gmt", "utc", "equator", "tropic", "meridian",
+                    }:
+                        continue
+
+                    bx, by, bw, bh = int(ent.bbox.x), int(ent.bbox.y), int(ent.bbox.width), int(ent.bbox.height)
+                    if bw < 8 or bh < 6:
+                        continue
+
+                    fake_txt = generate_synthetic_replacement(ent.label, txt)
+                    text_trackers.append(
+                        SensitiveTextTracker(bx, by, bw, bh, ent.label, txt, fake_txt, first_frame)
+                    )
+                    redacted_labels.add(ent.label.upper())
+            except Exception as exc:
+                LOGGER.warning("Could not initialize text trackers: %s", exc)
 
     temp_dir = Path(tempfile.mkdtemp(prefix="selective_face_blur_"))
     temp_video = temp_dir / "raw_intermediate.mp4"
@@ -473,6 +802,9 @@ def process_selective_video(
     # Process first frame
     for face in target_faces:
         first_frame = blur_region(first_frame, face, blur_strength)
+    for t_tracker in text_trackers:
+        first_frame = t_tracker.apply(first_frame)
+
     writer.write(first_frame)
     processed_count = 1
 
@@ -482,10 +814,17 @@ def process_selective_video(
             break
         processed_count += 1
         if max_end is None or processed_count <= max_end:
+            # 1. Update and blur faces
             for tracker in trackers:
                 tracked = tracker.update(frame, detector)
                 if tracked is not None:
                     frame = blur_region(frame, tracked, blur_strength)
+            # 2. Update and replace sensitive text with synthetic Faker data
+            for t_tracker in text_trackers:
+                t_bbox = t_tracker.update(frame)
+                if t_bbox is not None:
+                    frame = t_tracker.apply(frame)
+
         writer.write(frame)
 
     writer.release()
@@ -501,5 +840,7 @@ def process_selective_video(
         "faces_detected": len(faces),
         "faces_blurred": len(target_faces),
         "target_face_ids": target_ids,
+        "sensitive_items_redacted": len(text_trackers),
+        "redacted_entities": sorted(list(redacted_labels)),
         "output_path": str(output_path),
     }

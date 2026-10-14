@@ -153,6 +153,11 @@ class ImageDetector:
         image = cv2.imread(str(path))
         if image is None or image.size == 0:
             return []
+        return self.detect_frame(image)
+
+    def detect_frame(self, image: np.ndarray) -> List[DetectedEntity]:
+        if image is None or image.size == 0:
+            return []
 
         entities: list[DetectedEntity] = []
         detected_gender = None
