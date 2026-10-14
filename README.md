@@ -2,35 +2,44 @@
 
 LeakWatch is a privacy-preserving middleware designed during the UE23CS320A Capstone project to detect and mitigate multimodal privacy leaks **before** user content reaches downstream AI systems or social platforms. This repository implements the Phase 2 scope described in the project PDFs: full support for text + image modalities, adapters for audio/video, explainability artifacts, and an orchestration API/CLI layer.
 
-## Features (Phase 2 Scope)
-- Text privacy detection via spaCy NER, regex heuristics, and rule graphs.
-- Text mitigation strategies (masking, redaction, synthetic replacements) with audit trails.
-- Image privacy detection using OpenCV Haar cascades (faces) and OCR-assisted text scanning.
-- Image mitigation via facial blur plus on-canvas synthetic text rewrites that preserve document styling with explainability overlays.
-- Audio/video adapters that route through speech-to-text or frame sampling stubs so we can reuse the hardened text/image pipelines without extra model training.
-- Graph context data structures ready for future GraphSAGE experimentation (Phase 2 keeps them as declarative metadata only).
-- Unified pipeline manager with Typer-based CLI for scanning files/folders.
-- Configurable YAML settings, JSON audit logs, and sample datasets for quick demos.
+## Features
+- **Text Privacy Detection**: spaCy NER, regex heuristics, and rule graphs.
+- **Text Mitigation Strategies**: Masking, redaction, and synthetic replacements with audit trails.
+- **Image Privacy Detection**: OpenCV 5.0-compatible ONNX YuNet deep face detector (`cv2.FaceDetectorYN`) with multi-angle rotation scanning, HSV color contour detection for ID cards, and OCR-assisted text scanning.
+- **Image Mitigation**: Facial blurring, synthetic text rewrites with typography/color matching, and explainability overlay generation.
+- **Video Privacy & Tracking Engine**: Reusable tracking engine (`leakwatch.video`) with velocity extrapolation, occlusion recovery, edge coasting, multi-face selection, inverted blur mode, and audio-preserving FFmpeg remuxing.
+- **Audio Mitigation**: Automatic speech-to-text transcription via Whisper or companion transcripts, beep tone redaction for sensitive windows, and normalization via FFmpeg.
+- **FastAPI REST Service**: Modular endpoints for text, image, audio, and video sanitization, including video face preview (`/scan/video/preview-faces`) and selective sanitization (`/scan/video/selective`).
+- **Manifest V3 Chrome Extension**: Interactive browser extension supporting Text (with ChatGPT/Gemini/Claude injection), Image, Audio, and Video (with interactive face selection grid and preview).
+- **Audit & Explainability**: JSONL audit logs, span reports, and annotated preview overlays.
 
 ## Repository Layout
 ```
 leakwatch/
-  detection/         # modality detectors (text, image)
+  detection/         # modality detectors (text, image with OpenCV 5 YuNet ONNX)
   mitigation/        # mitigation strategies per modality
+  video/             # video face tracking engine, preview, & audio remuxing
   explainability/    # highlighting + audit artifacts
   orchestration/     # pipeline manager + CLI wiring
-  adapters/          # audio/video stubs + integrations
-  utils/             # shared helpers (config, logging, schema)
+  adapters/          # audio/video adapters
+  utils/             # shared helpers, schemas, and ONNX model assets
+service/
+  app.py             # FastAPI REST middleware (text, image, audio, video)
+extension/           # Chrome Extension (Manifest V3) for browser privacy
+  popup.html         # multi-tab UI (Text, Image, Audio, Interactive Video)
+  popup.js           # dynamic preview, face selection grid, API integration
+  content.js         # injection adapters for ChatGPT, Gemini, and Claude
+  run_tests.py       # automated extension integration test suite
 config/
   leakwatch.yaml     # default runtime configuration
 samples/
   text/              # demo text inputs
   images/            # demo image inputs
+  audio/             # demo audio inputs
+  video/             # demo video inputs
 scripts/
-  extract_pdf_text.py
-  download_models.py # (to be added) fetch spaCy/ocr assets
-tests/
-  ...                # pytest suite
+  selective_face_blur.py # standalone CLI face tracking tool
+tests/               # pytest suite (42 unit and integration tests)
 ```
 
 ## Getting Started
@@ -64,16 +73,45 @@ tests/
   ```
 
 ## Interactive Video Face Blur
-We've added a powerful new utility for selective video anonymization with occlusion recovery and audio preservation.
-Run it via:
+LeakWatch includes a high-performance selective video anonymization engine with spatial proximity tracking, occlusion recovery, and audio preservation.
+
+### Standalone CLI Tool
 ```powershell
+# Interactive GUI mode (displays first frame; click faces to blur)
 python scripts/selective_face_blur.py --video samples/video/Video1.mp4
+
+# Headless / CLI selection: blur faces #1 and #3
+python scripts/selective_face_blur.py --video samples/video/Video1.mp4 --face 1,3
+
+# Inverted mode: blur everyone EXCEPT face #2
+python scripts/selective_face_blur.py --video samples/video/Video1.mp4 --blur-all-except 2 --blur-strength 51
 ```
-**Features:**
-- **Interactive GUI**: Pops up a window to let you click which face(s) to blur.
-- **Multi-face Selection**: Track and blur multiple people simultaneously.
-- **Inverted Blur Mode (`--blur-all-except`)**: Blur everyone in the video *except* the selected target(s).
-- **Edge Coasting**: Smoothly handles subjects walking off-screen.
+
+**Key Capabilities:**
+- **OpenCV 5.0 YuNet ONNX**: Uses deep learning face detection (`face_detection_yunet_2023mar.onnx`) with multi-angle rotation invariance.
+- **Multi-face Tracking**: Tracks multiple individuals simultaneously with velocity extrapolation across frames.
+- **Occlusion Recovery**: Retains spatial anchors during occlusions and re-identifies targets when they reappear.
+- **Edge Coasting**: Smoothly predicts trajectories when subjects move off-screen or near frame borders.
+- **Audio Preservation**: Automatically remuxes the original audio track into the output using FFmpeg or bundled `imageio-ffmpeg`.
+
+---
+
+## Chrome Browser Extension (Privacy Sandbox)
+LeakWatch includes a full Manifest V3 browser extension under [`extension/`](file:///D:/LEAKWATCH_CAPSTONE/-Detection-and-Mitigation-of-Multimodal-Privacy-Leaks-in-AI-Systems-and-Social-Platforms/extension/) for protecting sensitive multimodal data directly inside web browsers.
+
+### Multimodal Tabs:
+- **Text Tab**: Scans text for PII/secrets, replaces with synthetic entities, and features **one-click direct prompt injection** into ChatGPT (`chatgpt.com`), Google Gemini (`gemini.google.com`), and Anthropic Claude (`claude.ai`).
+- **Image Tab**: Redacts faces, Aadhaar cards, and document PII with side-by-side previews and direct download.
+- **Audio Tab**: Transcribes and censors voice recordings with audible beep tones.
+- **Video Tab (Interactive Multi-Face Workflow)**:
+  1. **Upload Video**: Automatically invokes `/scan/video/preview-faces` upon file selection.
+  2. **Face Selector Grid**: Renders numbered face crop cards with checkboxes for visual selection.
+  3. **Mitigation Controls**: Radio toggle between *Blur selected faces* and *Blur all except selected*, plus an adjustable blur strength slider.
+  4. **Action & Player**: Triggers selective tracking or blanket fallback blur, loading the output into an in-popup HTML5 video player with download support.
+
+To install: Open Chrome -> navigate to `chrome://extensions` -> enable **Developer Mode** -> click **Load unpacked** -> select the `extension/` directory.
+
+---
 
 ### Sample Media Assets
 - Audio: `samples/audio/demo_call.wav` (plus transcript `demo_call.txt`) demonstrates the `scan-audio` flow. For real phone recordings, LeakWatch can:
@@ -83,56 +121,42 @@ python scripts/selective_face_blur.py --video samples/video/Video1.mp4
   - `*.audio.sanitized.txt` (sanitized transcript)
   - `*.audio.beeps.json` (beep windows)
   - `*.sanitized.wav` (audio with sensitive ranges replaced by tone)
-  Regenerate media via `python scripts/generate_demo_media.py` if needed.
-- Video: `samples/video/demo_clip.mp4` contains synthetic frames with visible text, ideal for `scan-video` walkthroughs.
+- Video: `samples/video/Video1.mp4` and `samples/video/demo_clip.mp4` provide real-world and synthetic clips for selective tracking and OCR walkthroughs.
+
+---
 
 ## REST API Middleware
-LeakWatch now ships with a FastAPI wrapper that reuses the CLI pipeline as-is.
+LeakWatch ships with a FastAPI backend service (`service/app.py`).
 
-1. **Install FastAPI extras** (already included in `pyproject.toml`).
-2. **Start the service**
+1. **Start the service**
   ```powershell
-  uvicorn service.app:app --host 0.0.0.0 --port 8000
+  python -m uvicorn service.app:app --host 0.0.0.0 --port 8000
   ```
-3. **Call an endpoint** (example: block uploads containing credit cards)
-  ```powershell
-  curl -X POST http://localhost:8000/scan/text ^
-    -H "Content-Type: application/json" ^
-    -d "{
-        \"text\": \"Email me at alice@example.com, card 4111 1111 1111 1111\",\n
-        \"policy\": { \"block_on\": [\"credit_card\"] }
-      }"
-  ```
-4. **Docker build/run**
-  ```powershell
-  docker build -t leakwatch-api .
-  docker run -p 8000:8000 leakwatch-api
-  ```
+2. **Core Endpoints**:
+  - `POST /scan/text`: Scan and redact text with customizable policies.
+  - `POST /scan/image` & `POST /scan/image/upload`: Sanitize document and face PII in images.
+  - `POST /scan/audio` & `POST /scan/audio/upload`: Sanitize speech with tone-masked sensitive terms.
+  - `POST /scan/video`: Blanket video sanitization via sparse frame processing.
+  - `POST /scan/video/preview-faces`: Upload video (multipart or JSON) to detect faces in frame 1; returns face count, annotated frame preview, and individual face crop thumbnails.
+  - `POST /scan/video/selective`: Selectively track and blur target faces (or invert selection) with audio preservation.
+  - `GET /artifacts/download`: Download generated sanitized media.
 
-5. **Download sanitized artifacts**
+3. **Example Request (`/scan/video/preview-faces`)**
   ```powershell
-  curl -G http://localhost:8000/artifacts/download --data-urlencode "path=artifacts/Gemini_Generated_Image_pg2bgppg2bgppg2b.sanitized.png" -o sanitized.png
+  curl -X POST http://localhost:8000/scan/video/preview-faces ^
+    -F "file=@samples/video/Video1.mp4"
   ```
 
-Each endpoint (`/scan/text`, `/scan/image`, `/scan/audio`, `/scan/video`) responds with the sanitized artifact paths, detected entities, audit log reference, and an `allow|block` decision derived from the supplied policy.
-
-## Phase-2 Alignment
-- **Detectors**: spaCy + regex for text, Haar/YOLO-compatible faces + EasyOCR for images, optional audio/video wrappers that reuse those flows.
-- **Mitigation**: Fully deterministic (masking, replacements, blurs). No GAN training; future GAN inpainting may be added as an optional demo only.
-- **Graphs / GNN**: Token/region graphs are captured as metadata to support future GraphSAGE research, but no GNN is executed in this release.
-- **Explainability**: Text span reports, bounding-box overlays, JSON audit log documenting what/why/how for every mitigation event.
-- **Demo readiness**: `scan-text`, `scan-image`, and sample runs in `samples/` provide an end-to-end story without requiring GPUs or large datasets.
-
-## Explainability & Audit Artifacts
-- **Sanitized output**: written to `artifacts/<name>.sanitized.<ext>`.
-- **Text span report** (`.spans.txt`): lists each detected entity with original vs sanitized snippets.
-- **Image overlay** (`.overlay.png`): draws bounding boxes for redacted regions.
-- **Audit log** (`artifacts/audit.log`): JSONL log capturing modality, entities, mitigations, and artifact paths.
+---
 
 ## Testing
-Run the automated tests with pytest:
+Run the automated test suites:
 ```powershell
-D:/Capstone/.venv/Scripts/python.exe -m pytest -q
+# 1. Run core Pytest unit and integration suite (42 tests)
+python -m pytest tests/ -q
+
+# 2. Run Chrome Extension integrity and API integration suite (39 tests)
+python extension/run_tests.py
 ```
 
 ## Phone Audio Quickstart
