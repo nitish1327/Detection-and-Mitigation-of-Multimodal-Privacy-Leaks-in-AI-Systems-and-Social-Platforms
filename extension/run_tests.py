@@ -117,7 +117,11 @@ def test_ui_tabs() -> None:
     js = (EXTENSION_DIR / "popup.js").read_text(encoding="utf-8")
     record("Text tab present", 'data-tab="text"' in html and "tab-text" in html)
     record("Image tab present", 'data-tab="image"' in html and "tab-image" in html)
+    record("Video tab present", 'data-tab="video"' in html and "tab-video" in html)
     record("Image upload control", 'id="image-input"' in html and 'type="file"' in html)
+    record("Video upload control", 'id="video-input"' in html and 'type="file"' in html)
+    record("Video face selector wired", "renderFaceGrid" in js and "video-face-grid" in html)
+    record("Video selective controls", "handleSelectiveSanitize" in js and "video-apply-selective-btn" in html)
     record("Download button wired", "handleDownloadImage" in js and "download-btn" in html)
     record("Text sanitization preserved", "sanitizeText" in js and "handleSendToLlm" in js)
 

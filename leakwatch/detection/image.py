@@ -117,14 +117,33 @@ class ImageDetector:
         self.text_labels = tuple(text_labels or ("scene_text",))
         self._text_detector = text_detector
 
-        # Frontal face cascade
-        cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-        self._face_cascade = cv2.CascadeClassifier(cascade_path)
         self._qr_detector = cv2.QRCodeDetector()
 
-        # Profile face cascade for angled faces
-        profile_path = cv2.data.haarcascades + "haarcascade_profileface.xml"
-        self._profile_cascade = cv2.CascadeClassifier(profile_path)
+        # OpenCV 5 YuNet face detector
+        self._model_path = Path(__file__).resolve().parent.parent / "utils" / "assets" / "face_detection_yunet_2023mar.onnx"
+        self._face_detector: cv2.FaceDetectorYN | None = None
+        self._face_cascade = None
+        self._profile_cascade = None
+
+        if not self._model_path.exists():
+            try:
+                from ..video.tracker import ensure_yunet_model
+                ensure_yunet_model(self._model_path)
+            except Exception as exc:
+                LOGGER.warning("Could not auto-download YuNet model: %s", exc)
+
+        if self._model_path.exists():
+            try:
+                self._face_detector = cv2.FaceDetectorYN_create(
+                    model=str(self._model_path),
+                    config="",
+                    input_size=(320, 320),
+                    score_threshold=0.4,
+                    nms_threshold=0.3,
+                    top_k=5000,
+                )
+            except Exception as exc:
+                LOGGER.warning("Failed to initialize FaceDetectorYN: %s", exc)
 
         self._ocr_reader = None
         # MRZ regex: usually 30-44 chars of uppercase letters, digits, and '<'
@@ -174,15 +193,75 @@ class ImageDetector:
         entities.extend(face_entities)
                 
         entities.extend(self._detect_id_card_by_color(image))
-        entities.extend(self._detect_faces(image))
         entities.extend(self._detect_text_multirotation(image))
         return entities
 
     # --- ID Card Detection via Color Segmentation -------------------------
     def _detect_id_card_by_color(self, image: np.ndarray) -> Iterable[DetectedEntity]:
         """Detect light-colored rectangular cards against darker backgrounds."""
-        # Stub: color-segmentation logic not yet implemented.
-        return []
+        img_h, img_w = image.shape[:2]
+        img_area = img_h * img_w
+        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+
+        # Detect light/white regions — broadened range to include off-white cards
+        lower_white = np.array([0, 0, 140])
+        upper_white = np.array([180, 100, 255])
+        mask = cv2.inRange(hsv, lower_white, upper_white)
+
+        # Clean up the mask with morphology
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 15))
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=4)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=2)
+
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        min_card_area = img_area * 0.02
+        max_card_area = img_area * 0.50
+
+        results: list[DetectedEntity] = []
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            if area < min_card_area or area > max_card_area:
+                continue
+
+            rect = cv2.minAreaRect(contour)
+            (cx, cy), (w_rect, h_rect), angle = rect
+            if w_rect == 0 or h_rect == 0:
+                continue
+
+            aspect = max(w_rect, h_rect) / min(w_rect, h_rect)
+            if aspect < 1.2 or aspect > 2.8:
+                continue
+
+            hull = cv2.convexHull(contour)
+            hull_area = cv2.contourArea(hull)
+            solidity = (area / hull_area) if hull_area > 0 else 0
+            if solidity < 0.6:
+                continue
+
+            box = cv2.boxPoints(rect)
+            box = np.int32(box)
+            pad = 20
+            x_min = max(0, int(min(box[:, 0])) - pad)
+            y_min = max(0, int(min(box[:, 1])) - pad)
+            x_max = min(img_w, int(max(box[:, 0])) + pad)
+            y_max = min(img_h, int(max(box[:, 1])) + pad)
+            w = x_max - x_min
+            h = y_max - y_min
+
+            if w > 30 and h > 30:
+                results.append(
+                    DetectedEntity(
+                        modality=Modality.IMAGE,
+                        label="document_card",
+                        confidence=0.88,
+                        bbox=BoundingBox(x=x_min, y=y_min, width=w, height=h),
+                        mitigation="blur",
+                        detection_method="heuristic",
+                    )
+                )
+
+        return results
 
     def _get_ocr_results(self, image: np.ndarray) -> List[Tuple[Sequence[Tuple[float, float]], str, float]]:
         """Run OCR and return raw detections (bbox, text, confidence)."""
@@ -413,68 +492,25 @@ class ImageDetector:
             mitigation="blur",
         )
 
-        # Detect light/white regions — broadened range to include off-white cards
-        lower_white = np.array([0, 0, 140])
-        upper_white = np.array([180, 100, 255])
-        mask = cv2.inRange(hsv, lower_white, upper_white)
-
-        # Clean up the mask with morphology
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 15))
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=4)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=2)
-
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-        min_card_area = img_area * 0.02
-        max_card_area = img_area * 0.50
-
-        results: list[DetectedEntity] = []
-        for contour in contours:
-            area = cv2.contourArea(contour)
-            if area < min_card_area or area > max_card_area:
-                continue
-
-            rect = cv2.minAreaRect(contour)
-            (cx, cy), (w_rect, h_rect), angle = rect
-            if w_rect == 0 or h_rect == 0:
-                continue
-
-            aspect = max(w_rect, h_rect) / min(w_rect, h_rect)
-            if aspect < 1.2 or aspect > 2.8:
-                continue
-
-            hull = cv2.convexHull(contour)
-            hull_area = cv2.contourArea(hull)
-            solidity = (area / hull_area) if hull_area > 0 else 0
-            if solidity < 0.6:
-                continue
-
-            box = cv2.boxPoints(rect)
-            box = np.int32(box)
-            pad = 20
-            x_min = max(0, int(min(box[:, 0])) - pad)
-            y_min = max(0, int(min(box[:, 1])) - pad)
-            x_max = min(img_w, int(max(box[:, 0])) + pad)
-            y_max = min(img_h, int(max(box[:, 1])) + pad)
-            w = x_max - x_min
-            h = y_max - y_min
-
-            if w > 30 and h > 30:
-                results.append(
-                    DetectedEntity(
-                        modality=Modality.IMAGE,
-                        label="document_card",
-                        confidence=0.88,
-                        bbox=BoundingBox(x=x_min, y=y_min, width=w, height=h),
-                        mitigation="blur",
-                        detection_method="heuristic",
-                    )
-                )
-
-        return results
-
     # --- Face Detection ---------------------------------------------------
     def _detect_faces(self, image: np.ndarray) -> Iterable[DetectedEntity]:
+        if self._face_detector is None and self._model_path.exists():
+            try:
+                self._face_detector = cv2.FaceDetectorYN_create(
+                    model=str(self._model_path),
+                    config="",
+                    input_size=(320, 320),
+                    score_threshold=0.4,
+                    nms_threshold=0.3,
+                    top_k=5000,
+                )
+            except Exception as exc:
+                LOGGER.warning("Failed to initialize FaceDetectorYN: %s", exc)
+                return []
+
+        if self._face_detector is None:
+            return []
+
         img_h, img_w = image.shape[:2]
 
         rotations = [
@@ -487,35 +523,29 @@ class ImageDetector:
         seen_faces_global: list[BoundingBox] = []
 
         for angle, rot_img in rotations:
-            gray = cv2.cvtColor(rot_img, cv2.COLOR_BGR2GRAY)
+            rh, rw = rot_img.shape[:2]
+            self._face_detector.setInputSize((rw, rh))
+            try:
+                _, raw = self._face_detector.detect(rot_img)
+            except Exception as exc:
+                LOGGER.warning("YuNet face detection failed at angle %d: %s", angle, exc)
+                continue
 
-            # Detect frontal faces
-            frontal_faces = self._face_cascade.detectMultiScale(
-                gray, scaleFactor=1.1, minNeighbors=3, minSize=(20, 20),
-            )
-            for (x, y, w, h) in frontal_faces:
-                # Transform bbox back to original image coordinates
-                points = [(x, y), (x + w, y), (x + w, y + h), (x, y + h)]
-                bbox = self._transform_bbox_rotated(points, angle, img_h, img_w) if angle != 0 else self._bbox_from_points(points)
+            if raw is None:
+                continue
 
-                # Check for overlap with already seen faces in original coordinates
-                if any(self._bbox_overlap(bbox, seen) for seen in seen_faces_global):
+            for face in raw:
+                fx, fy, fw, fh = int(face[0]), int(face[1]), int(face[2]), int(face[3])
+                score = float(face[14]) if len(face) > 14 else 0.9
+
+                # Clamp bounding box coordinates to rotated image dimensions
+                x = max(0, fx)
+                y = max(0, fy)
+                w = min(rw - x, fw)
+                h = min(rh - y, fh)
+                if w <= 0 or h <= 0:
                     continue
-                seen_faces_global.append(bbox)
-                yield DetectedEntity(
-                    modality=Modality.IMAGE,
-                    label="face",
-                    confidence=0.9,
-                    bbox=bbox,
-                    mitigation="blur",
-                    detection_method="heuristic",
-                )
 
-            # Detect profile faces
-            profile_faces = self._profile_cascade.detectMultiScale(
-                gray, scaleFactor=1.1, minNeighbors=3, minSize=(20, 20),
-            )
-            for (x, y, w, h) in profile_faces:
                 points = [(x, y), (x + w, y), (x + w, y + h), (x, y + h)]
                 bbox = self._transform_bbox_rotated(points, angle, img_h, img_w) if angle != 0 else self._bbox_from_points(points)
 
@@ -525,7 +555,7 @@ class ImageDetector:
                 yield DetectedEntity(
                     modality=Modality.IMAGE,
                     label="face",
-                    confidence=0.85,
+                    confidence=score,
                     bbox=bbox,
                     mitigation="blur",
                     detection_method="heuristic",

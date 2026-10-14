@@ -5,6 +5,8 @@ const TEXT_SCAN_ENDPOINT = `${BACKEND_BASE}/scan/text`;
 const IMAGE_UPLOAD_ENDPOINT = `${BACKEND_BASE}/scan/image/upload`;
 const AUDIO_UPLOAD_ENDPOINT = `${BACKEND_BASE}/scan/audio/upload`;
 const VIDEO_UPLOAD_ENDPOINT = `${BACKEND_BASE}/scan/video/upload`;
+const VIDEO_PREVIEW_FACES_ENDPOINT = `${BACKEND_BASE}/scan/video/preview-faces`;
+const VIDEO_SELECTIVE_ENDPOINT = `${BACKEND_BASE}/scan/video/selective`;
 const HEALTH_ENDPOINT = `${BACKEND_BASE}/health`;
 const TEXT_TIMEOUT_MS = 15000;
 const IMAGE_TIMEOUT_MS = 120000;
@@ -78,6 +80,15 @@ const audioDownloadBtn = document.getElementById("audio-download-btn");
 
 // Video tab
 const videoInput = document.getElementById("video-input");
+const videoScanStatus = document.getElementById("video-scan-status");
+const videoFaceSelectionPanel = document.getElementById("video-face-selection-panel");
+const videoFaceCountText = document.getElementById("video-face-count-text");
+const videoAnnotatedFrameContainer = document.getElementById("video-annotated-frame-container");
+const videoAnnotatedFrame = document.getElementById("video-annotated-frame");
+const videoFaceGrid = document.getElementById("video-face-grid");
+const videoBlurStrengthSlider = document.getElementById("video-blur-strength");
+const videoBlurStrengthVal = document.getElementById("video-blur-strength-val");
+const videoApplySelectiveBtn = document.getElementById("video-apply-selective-btn");
 const videoSanitizeBtn = document.getElementById("video-sanitize-btn");
 const videoPreviewPanel = document.getElementById("video-preview-panel");
 const sanitizedVideoEl = document.getElementById("sanitized-video");
@@ -105,6 +116,8 @@ let selectedVideoFile = null;
 let sanitizedVideoUrl = null;
 let sanitizedVideoBlob = null;
 let sanitizedVideoDownloadName = "sanitized.mp4";
+let detectedVideoFaces = [];
+let selectedFaceIds = new Set();
 
 document.addEventListener("DOMContentLoaded", () => {
   checkBackendHealth();
@@ -694,6 +707,14 @@ function initVideoTab() {
   videoInput.addEventListener("change", handleVideoSelected);
   videoSanitizeBtn.addEventListener("click", handleVideoSanitize);
   videoDownloadBtn.addEventListener("click", handleDownloadVideo);
+  if (videoApplySelectiveBtn) {
+    videoApplySelectiveBtn.addEventListener("click", handleSelectiveSanitize);
+  }
+  if (videoBlurStrengthSlider && videoBlurStrengthVal) {
+    videoBlurStrengthSlider.addEventListener("input", () => {
+      videoBlurStrengthVal.textContent = videoBlurStrengthSlider.value;
+    });
+  }
 }
 
 function revokeVideoUrls() {
@@ -704,23 +725,246 @@ function revokeVideoUrls() {
   sanitizedVideoBlob = null;
 }
 
-function handleVideoSelected(event) {
+async function handleVideoSelected(event) {
   clearError();
   revokeVideoUrls();
   videoDownloadBtn.disabled = true;
   sanitizedVideoEl.removeAttribute("src");
+  if (videoFaceSelectionPanel) videoFaceSelectionPanel.classList.add("hidden");
+  if (videoPreviewPanel) videoPreviewPanel.classList.add("hidden");
+  if (videoAnnotatedFrameContainer) videoAnnotatedFrameContainer.classList.add("hidden");
+  if (videoFaceGrid) videoFaceGrid.innerHTML = "";
+  detectedVideoFaces = [];
+  selectedFaceIds.clear();
 
   const file = event.target.files?.[0];
   if (!file) {
     selectedVideoFile = null;
     videoSanitizeBtn.disabled = true;
-    videoPreviewPanel.classList.add("hidden");
+    if (videoApplySelectiveBtn) videoApplySelectiveBtn.disabled = true;
     return;
   }
 
   selectedVideoFile = file;
-  videoSanitizeBtn.disabled = false;
-  videoPreviewPanel.classList.add("hidden");
+  if (videoScanStatus) videoScanStatus.classList.remove("hidden");
+
+  try {
+    const formData = new FormData();
+    formData.append("file", file, file.name);
+
+    const response = await fetchWithTimeout(
+      VIDEO_PREVIEW_FACES_ENDPOINT,
+      { method: "POST", body: formData },
+      VIDEO_TIMEOUT_MS
+    );
+    const data = await parseJsonResponse(response);
+
+    if (!response.ok) {
+      const detail = data.detail || data.message || response.statusText;
+      throw new Error(`Face preview failed (${response.status}): ${detail}`);
+    }
+
+    detectedVideoFaces = data.faces || [];
+    const count = data.face_count !== undefined ? data.face_count : detectedVideoFaces.length;
+
+    if (videoFaceCountText) {
+      videoFaceCountText.textContent = count > 0
+        ? `Detected ${count} face(s) in video. Select faces to mitigate:`
+        : "No faces detected in the first frame. You can still use 'Blur Everything'.";
+    }
+
+    const previewB64 = data.annotated_frame_base64 || data.preview_image_base64;
+    if (previewB64 && videoAnnotatedFrame && videoAnnotatedFrameContainer) {
+      videoAnnotatedFrame.src = `data:image/jpeg;base64,${previewB64}`;
+      videoAnnotatedFrameContainer.classList.remove("hidden");
+    }
+
+    renderFaceGrid(detectedVideoFaces);
+
+    if (videoFaceSelectionPanel) {
+      videoFaceSelectionPanel.classList.remove("hidden");
+    }
+    videoSanitizeBtn.disabled = false;
+    if (videoApplySelectiveBtn) {
+      videoApplySelectiveBtn.disabled = false;
+    }
+    setBackendStatus("ok");
+  } catch (err) {
+    showError(err.message);
+    setBackendStatus("error");
+    // Fallback: still show panel for blanket blur option
+    if (videoFaceSelectionPanel) videoFaceSelectionPanel.classList.remove("hidden");
+    videoSanitizeBtn.disabled = false;
+  } finally {
+    if (videoScanStatus) videoScanStatus.classList.add("hidden");
+  }
+}
+
+function renderFaceGrid(faces) {
+  if (!videoFaceGrid) return;
+  videoFaceGrid.innerHTML = "";
+  selectedFaceIds.clear();
+
+  if (!faces || faces.length === 0) {
+    const emptyP = document.createElement("p");
+    emptyP.className = "muted";
+    emptyP.textContent = "No face thumbnails available.";
+    videoFaceGrid.appendChild(emptyP);
+    return;
+  }
+
+  // Pre-select first face by default
+  selectedFaceIds.add(faces[0].id);
+
+  faces.forEach((face) => {
+    const card = document.createElement("div");
+    card.className = "face-card";
+    if (selectedFaceIds.has(face.id)) {
+      card.classList.add("selected");
+    }
+    card.dataset.faceId = String(face.id);
+
+    const thumbWrap = document.createElement("div");
+    thumbWrap.className = "face-thumb-wrapper";
+
+    if (face.thumbnail_base64) {
+      const img = document.createElement("img");
+      img.src = `data:image/jpeg;base64,${face.thumbnail_base64}`;
+      img.alt = `Face #${face.id}`;
+      thumbWrap.appendChild(img);
+    } else {
+      const placeholder = document.createElement("div");
+      placeholder.className = "face-thumb-placeholder";
+      placeholder.textContent = `Face #${face.id}`;
+      thumbWrap.appendChild(placeholder);
+    }
+
+    const badge = document.createElement("span");
+    badge.className = "face-id-badge";
+    badge.textContent = `#${face.id}`;
+    thumbWrap.appendChild(badge);
+
+    const checkWrap = document.createElement("label");
+    checkWrap.className = "face-checkbox-label";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.className = "face-checkbox";
+    checkbox.value = String(face.id);
+    checkbox.checked = selectedFaceIds.has(face.id);
+
+    const checkText = document.createElement("span");
+    checkText.textContent = " Select";
+
+    checkWrap.appendChild(checkbox);
+    checkWrap.appendChild(checkText);
+
+    card.appendChild(thumbWrap);
+    card.appendChild(checkWrap);
+
+    function toggleFace() {
+      if (selectedFaceIds.has(face.id)) {
+        selectedFaceIds.delete(face.id);
+        card.classList.remove("selected");
+        checkbox.checked = false;
+      } else {
+        selectedFaceIds.add(face.id);
+        card.classList.add("selected");
+        checkbox.checked = true;
+      }
+    }
+
+    card.addEventListener("click", (e) => {
+      if (e.target !== checkbox) {
+        toggleFace();
+      }
+    });
+
+    checkbox.addEventListener("change", () => {
+      if (checkbox.checked) {
+        selectedFaceIds.add(face.id);
+        card.classList.add("selected");
+      } else {
+        selectedFaceIds.delete(face.id);
+        card.classList.remove("selected");
+      }
+    });
+
+    videoFaceGrid.appendChild(card);
+  });
+}
+
+async function handleSelectiveSanitize() {
+  clearError();
+
+  if (!selectedVideoFile) {
+    showError("Select a video file to sanitize.");
+    return;
+  }
+
+  const modeRadio = document.querySelector('input[name="video-mode"]:checked');
+  const mode = modeRadio ? modeRadio.value : "blur_selected";
+  const blurStrength = videoBlurStrengthSlider ? videoBlurStrengthSlider.value : 51;
+  const faceIdsArray = Array.from(selectedFaceIds);
+
+  if (mode === "blur_selected" && faceIdsArray.length === 0) {
+    showError("Please select at least one face, or choose 'Blur all except selected', or click 'Blur Everything'.");
+    return;
+  }
+
+  videoApplySelectiveBtn.classList.add("loading");
+  videoApplySelectiveBtn.textContent = "Sanitizing…";
+  videoApplySelectiveBtn.disabled = true;
+  videoSanitizeBtn.disabled = true;
+  videoDownloadBtn.disabled = true;
+
+  try {
+    const formData = new FormData();
+    formData.append("file", selectedVideoFile, selectedVideoFile.name);
+    formData.append("selected_faces", JSON.stringify(faceIdsArray));
+    formData.append("mode", mode);
+    formData.append("blur_strength", String(blurStrength));
+
+    const response = await fetchWithTimeout(
+      VIDEO_SELECTIVE_ENDPOINT,
+      { method: "POST", body: formData },
+      VIDEO_TIMEOUT_MS
+    );
+    const result = await parseJsonResponse(response);
+
+    if (!response.ok) {
+      const detail = result.detail || result.message || response.statusText;
+      throw new Error(`Sanitization failed (${response.status}): ${detail}`);
+    }
+
+    const blob = await resolveSanitizedMediaBlob(result, "video/mp4", VIDEO_TIMEOUT_MS);
+    if (sanitizedVideoUrl) {
+      URL.revokeObjectURL(sanitizedVideoUrl);
+    }
+    sanitizedVideoBlob = blob;
+    sanitizedVideoUrl = URL.createObjectURL(blob);
+    sanitizedVideoEl.src = sanitizedVideoUrl;
+
+    const stem = selectedVideoFile.name.replace(/\.[^.]+$/, "");
+    sanitizedVideoDownloadName = `${stem}.sanitized.mp4`;
+
+    renderEntityList(
+      videoEntitiesList,
+      videoNoEntities,
+      result.redacted_entities || extractEntityLabels(result.entities)
+    );
+
+    videoPreviewPanel.classList.remove("hidden");
+    videoDownloadBtn.disabled = false;
+    setBackendStatus("ok");
+  } catch (error) {
+    showError(error.message);
+    setBackendStatus("error");
+  } finally {
+    videoApplySelectiveBtn.classList.remove("loading");
+    videoApplySelectiveBtn.textContent = "Apply Selective Sanitization";
+    videoApplySelectiveBtn.disabled = !selectedVideoFile;
+    videoSanitizeBtn.disabled = !selectedVideoFile;
+  }
 }
 
 async function handleVideoSanitize() {
@@ -734,6 +978,7 @@ async function handleVideoSanitize() {
   videoSanitizeBtn.classList.add("loading");
   videoSanitizeBtn.textContent = "Sanitizing…";
   videoSanitizeBtn.disabled = true;
+  if (videoApplySelectiveBtn) videoApplySelectiveBtn.disabled = true;
   videoDownloadBtn.disabled = true;
 
   try {
@@ -763,8 +1008,9 @@ async function handleVideoSanitize() {
     setBackendStatus("error");
   } finally {
     videoSanitizeBtn.classList.remove("loading");
-    videoSanitizeBtn.textContent = "Sanitize Video";
+    videoSanitizeBtn.textContent = "Blur Everything";
     videoSanitizeBtn.disabled = !selectedVideoFile;
+    if (videoApplySelectiveBtn) videoApplySelectiveBtn.disabled = !selectedVideoFile;
   }
 }
 

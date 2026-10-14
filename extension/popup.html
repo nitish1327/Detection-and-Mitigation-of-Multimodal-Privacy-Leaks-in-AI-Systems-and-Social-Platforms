@@ -159,21 +159,95 @@
 
     <!-- ==================== VIDEO TAB ==================== -->
     <div id="tab-video" class="tab-panel hidden" role="tabpanel">
+      <!-- Step 1: Upload Video -->
       <section class="panel">
-        <label for="video-input" class="label">Upload video</label>
+        <div class="step-header">
+          <span class="step-badge">Step 1</span>
+          <span class="step-title">Upload Video</span>
+        </div>
+        <label for="video-input" class="label">Choose a video file</label>
         <input
           id="video-input"
           type="file"
           accept=".mp4,.mov,.avi,.mkv,.webm,.m4v,video/*"
         />
         <p class="muted file-hint">Supported: MP4, MOV, AVI, MKV, WebM</p>
-        <button id="video-sanitize-btn" type="button" class="btn btn-primary" disabled>
-          Sanitize Video
-        </button>
+        <div id="video-scan-status" class="scan-status-message hidden">
+          <span class="spinner"></span> Detecting faces in video…
+        </div>
       </section>
 
+      <!-- Step 2: Interactive Face Selection -->
+      <section id="video-face-selection-panel" class="panel hidden">
+        <div class="step-header">
+          <span class="step-badge">Step 2</span>
+          <span class="step-title">Select Faces to Mitigate</span>
+        </div>
+        <p id="video-face-count-text" class="sub-text">Detected faces:</p>
+
+        <!-- Annotated frame preview -->
+        <div id="video-annotated-frame-container" class="annotated-frame-wrapper hidden">
+          <img id="video-annotated-frame" alt="First frame with face IDs" />
+        </div>
+
+        <!-- Face selector grid -->
+        <div id="video-face-grid" class="face-grid"></div>
+
+        <!-- Mode Radio Toggle -->
+        <div class="control-group">
+          <span class="label">Mitigation Mode</span>
+          <div class="radio-group">
+            <label class="radio-card">
+              <input type="radio" name="video-mode" value="blur_selected" checked />
+              <div class="radio-card-content">
+                <strong>Blur selected faces</strong>
+                <span class="muted">Only chosen faces will be blurred</span>
+              </div>
+            </label>
+            <label class="radio-card">
+              <input type="radio" name="video-mode" value="blur_all_except" />
+              <div class="radio-card-content">
+                <strong>Blur all except selected</strong>
+                <span class="muted">Keep chosen faces clear, blur others</span>
+              </div>
+            </label>
+          </div>
+        </div>
+
+        <!-- Blur strength slider -->
+        <div class="control-group">
+          <div class="slider-header">
+            <label for="video-blur-strength" class="label">Blur Strength</label>
+            <span id="video-blur-strength-val" class="slider-val">51</span>
+          </div>
+          <input
+            id="video-blur-strength"
+            type="range"
+            min="15"
+            max="99"
+            step="2"
+            value="51"
+            class="slider-input"
+          />
+        </div>
+
+        <!-- Step 3: Action Buttons -->
+        <div class="actions vertical-actions">
+          <button id="video-apply-selective-btn" type="button" class="btn btn-primary">
+            Apply Selective Sanitization
+          </button>
+          <button id="video-sanitize-btn" type="button" class="btn btn-secondary">
+            Blur Everything (Blanket Blur)
+          </button>
+        </div>
+      </section>
+
+      <!-- Step 4: Result Preview & Download -->
       <section id="video-preview-panel" class="panel hidden">
-        <h2 class="section-title">Sanitized video preview</h2>
+        <div class="step-header">
+          <span class="step-badge">Step 3</span>
+          <span class="step-title">Sanitized Video Preview</span>
+        </div>
         <div class="media-preview-container">
           <video id="sanitized-video" controls class="media-player"></video>
         </div>

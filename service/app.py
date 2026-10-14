@@ -3,20 +3,26 @@
 from __future__ import annotations
 
 import base64
+import json
 import shutil
 import tempfile
 import urllib.request
+import uuid
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field, HttpUrl, model_validator
 
 from leakwatch.orchestration import PipelineManager, VideoProcessingError
 from leakwatch.utils.config import get_config
 from leakwatch.utils.types import DetectionResult
+from leakwatch.video.tracker import (
+    generate_video_face_preview,
+    process_selective_video,
+)
 
 app = FastAPI(
     title="LeakWatch Middleware API",
@@ -73,10 +79,10 @@ class TextScanRequest(BaseModel):
     policy: PolicyConfig = Field(default_factory=PolicyConfig)
 
     @model_validator(mode="after")
-    def validate_source(cls, values: "TextScanRequest") -> "TextScanRequest":
-        if not values.text and not values.path and not values.url:
+    def validate_source(self) -> "TextScanRequest":
+        if not self.text and not self.path and not self.url:
             raise ValueError("Provide at least one of: text, path, url")
-        return values
+        return self
 
 
 class FileScanRequest(BaseModel):
@@ -85,10 +91,10 @@ class FileScanRequest(BaseModel):
     policy: PolicyConfig = Field(default_factory=PolicyConfig)
 
     @model_validator(mode="after")
-    def validate_source(cls, values: "FileScanRequest") -> "FileScanRequest":
-        if not values.path and not values.url:
+    def validate_source(self) -> "FileScanRequest":
+        if not self.path and not self.url:
             raise ValueError("Provide either path or url for non-text modalities")
-        return values
+        return self
 
 
 class ScanResponse(BaseModel):
@@ -102,6 +108,14 @@ class ScanResponse(BaseModel):
     redacted_entities: list[str] = Field(default_factory=list)
     sanitized_image_base64: str | None = None
     download_url: str | None = None
+
+
+class SelectiveVideoScanResponse(ScanResponse):
+    status: str = "success"
+    faces_detected: int = 0
+    faces_blurred: int = 0
+    selected_faces: list[int] = Field(default_factory=list)
+    mode: str = "blur_selected"
 
 
 @app.get("/health")
@@ -138,6 +152,8 @@ def scan_image(request: FileScanRequest) -> ScanResponse:
         response = _build_response(result, request.policy)
         _attach_image_payload(response, result)
         return response
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Image processing failed: {exc}") from exc
     finally:
         _cleanup(scratch_dir)
 
@@ -175,6 +191,8 @@ async def scan_image_upload(file: UploadFile = File(...)) -> ScanResponse:
         response = _build_response(result, PolicyConfig())
         _attach_image_payload(response, result)
         return response
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Image processing failed: {exc}") from exc
     finally:
         _cleanup(scratch_dir)
 
@@ -187,8 +205,8 @@ def scan_audio(request: FileScanRequest) -> ScanResponse:
         response = _build_response(result, request.policy)
         _attach_download_payload(response, result)
         return response
-    except RuntimeError as exc:  # e.g., modality disabled
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Audio processing failed: {exc}") from exc
     finally:
         _cleanup(scratch_dir)
 
@@ -219,8 +237,8 @@ async def scan_audio_upload(file: UploadFile = File(...)) -> ScanResponse:
         response = _build_response(result, PolicyConfig())
         _attach_download_payload(response, result)
         return response
-    except RuntimeError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Audio processing failed: {exc}") from exc
     finally:
         _cleanup(scratch_dir)
 
@@ -235,7 +253,7 @@ def scan_video(request: FileScanRequest) -> ScanResponse:
         return response
     except VideoProcessingError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except RuntimeError as exc:
+    except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     finally:
         _cleanup(scratch_dir)
@@ -269,10 +287,231 @@ async def scan_video_upload(file: UploadFile = File(...)) -> ScanResponse:
         return response
     except VideoProcessingError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except RuntimeError as exc:
+    except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     finally:
         _cleanup(scratch_dir)
+
+
+@app.post("/scan/video/preview-faces")
+async def preview_video_faces(request: Request) -> dict[str, Any]:
+    """Inspect first valid video frame, detect all faces using YuNet, and return previews."""
+    content_type = (request.headers.get("content-type") or "").lower()
+    source_path: Path | None = None
+    scratch_dir: Path | None = None
+
+    try:
+        if "multipart/form-data" in content_type:
+            form = await request.form()
+            uploaded_file = form.get("file")
+            if not uploaded_file:
+                # Fallback to path in form
+                path_val = form.get("path")
+                if path_val:
+                    source_path, scratch_dir = _materialize_file(str(path_val), None, suffix=".mp4")
+                else:
+                    raise HTTPException(status_code=400, detail="Video file is required in 'file' field.")
+            else:
+                filename = getattr(uploaded_file, "filename", "video.mp4") or "video.mp4"
+                suffix = Path(filename).suffix.lower()
+                if suffix not in ALLOWED_VIDEO_SUFFIXES:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Unsupported video format '{suffix}'. Allowed: {', '.join(sorted(ALLOWED_VIDEO_SUFFIXES))}",
+                    )
+                raw = await uploaded_file.read()
+                if not raw:
+                    raise HTTPException(status_code=400, detail="Uploaded video is empty.")
+                scratch_dir = Path(tempfile.mkdtemp(prefix="leakwatch_video_prev_"))
+                source_path = scratch_dir / f"upload{suffix}"
+                source_path.write_bytes(raw)
+        elif "application/json" in content_type:
+            try:
+                body = await request.json()
+            except Exception:
+                raise HTTPException(status_code=400, detail="Invalid JSON body.")
+            path_val = body.get("path")
+            url_val = body.get("url")
+            source_path, scratch_dir = _materialize_file(path_val, url_val, suffix=".mp4")
+        else:
+            form = await request.form()
+            uploaded_file = form.get("file")
+            if uploaded_file:
+                filename = getattr(uploaded_file, "filename", "video.mp4") or "video.mp4"
+                suffix = Path(filename).suffix.lower()
+                raw = await uploaded_file.read()
+                scratch_dir = Path(tempfile.mkdtemp(prefix="leakwatch_video_prev_"))
+                source_path = scratch_dir / f"upload{suffix}"
+                source_path.write_bytes(raw)
+            else:
+                raise HTTPException(status_code=400, detail="Provide a video file upload or JSON with path/url.")
+
+        preview_data = generate_video_face_preview(source_path)
+        return preview_data
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        _cleanup(scratch_dir)
+
+
+def _parse_face_selection(raw: Any) -> list[int]:
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        return [int(x) for x in raw]
+    if isinstance(raw, int):
+        return [raw]
+    if isinstance(raw, str):
+        val = raw.strip()
+        if not val:
+            return []
+        if val.startswith("[") and val.endswith("]"):
+            try:
+                parsed = json.loads(val)
+                if isinstance(parsed, list):
+                    return [int(x) for x in parsed]
+            except Exception:
+                pass
+        return [int(p.strip()) for p in val.split(",") if p.strip()]
+    return []
+
+
+@app.post("/scan/video/selective", response_model=SelectiveVideoScanResponse)
+async def scan_video_selective(request: Request) -> dict[str, Any]:
+    """Selectively blur target faces in a video, preserving audio with FFmpeg."""
+    content_type = (request.headers.get("content-type") or "").lower()
+    source_path: Path | None = None
+    scratch_dir: Path | None = None
+    selected_faces: list[int] = []
+    mode: str = "blur_selected"
+    blur_strength: int = 51
+
+    try:
+        if "multipart/form-data" in content_type:
+            form = await request.form()
+            uploaded_file = form.get("file")
+            if not uploaded_file:
+                path_val = form.get("path")
+                if path_val:
+                    source_path, scratch_dir = _materialize_file(str(path_val), None, suffix=".mp4")
+                else:
+                    raise HTTPException(status_code=400, detail="Video file is required in 'file' field.")
+            else:
+                filename = getattr(uploaded_file, "filename", "video.mp4") or "video.mp4"
+                suffix = Path(filename).suffix.lower()
+                if suffix not in ALLOWED_VIDEO_SUFFIXES:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Unsupported video format '{suffix}'. Allowed: {', '.join(sorted(ALLOWED_VIDEO_SUFFIXES))}",
+                    )
+                raw = await uploaded_file.read()
+                if not raw:
+                    raise HTTPException(status_code=400, detail="Uploaded video is empty.")
+                scratch_dir = Path(tempfile.mkdtemp(prefix="leakwatch_video_sel_"))
+                source_path = scratch_dir / f"upload{suffix}"
+                source_path.write_bytes(raw)
+
+            selected_faces = _parse_face_selection(form.get("selected_faces"))
+            mode = str(form.get("mode", "blur_selected")).strip()
+            try:
+                blur_strength = int(form.get("blur_strength", 51))
+            except (ValueError, TypeError):
+                blur_strength = 51
+
+        elif "application/json" in content_type:
+            try:
+                body = await request.json()
+            except Exception:
+                raise HTTPException(status_code=400, detail="Invalid JSON body.")
+            path_val = body.get("path")
+            url_val = body.get("url")
+            source_path, scratch_dir = _materialize_file(path_val, url_val, suffix=".mp4")
+            selected_faces = _parse_face_selection(body.get("selected_faces"))
+            mode = str(body.get("mode", "blur_selected")).strip()
+            try:
+                blur_strength = int(body.get("blur_strength", 51))
+            except (ValueError, TypeError):
+                blur_strength = 51
+
+        else:
+            form = await request.form()
+            uploaded_file = form.get("file")
+            if uploaded_file:
+                filename = getattr(uploaded_file, "filename", "video.mp4") or "video.mp4"
+                suffix = Path(filename).suffix.lower()
+                raw = await uploaded_file.read()
+                scratch_dir = Path(tempfile.mkdtemp(prefix="leakwatch_video_sel_"))
+                source_path = scratch_dir / f"upload{suffix}"
+                source_path.write_bytes(raw)
+                selected_faces = _parse_face_selection(form.get("selected_faces"))
+                mode = str(form.get("mode", "blur_selected")).strip()
+                blur_strength = int(form.get("blur_strength", 51))
+            else:
+                raise HTTPException(status_code=400, detail="Provide a video file upload or JSON with path/url.")
+
+        if mode not in ("blur_selected", "blur_all_except"):
+            mode = "blur_selected"
+
+        output_dir = Path(CONFIG.app.output_dir).resolve()
+        output_dir.mkdir(parents=True, exist_ok=True)
+        unique_name = f"{source_path.stem}.sanitized_{uuid.uuid4().hex[:8]}.mp4"
+        output_path = output_dir / unique_name
+
+        res = process_selective_video(
+            source_video_path=source_path,
+            output_path=output_path,
+            selected_face_ids=selected_faces,
+            mode=mode,
+            blur_strength=blur_strength,
+        )
+
+        relative_download_url = f"/artifacts/download?path={output_path.name}"
+        entities = [
+            {
+                "modality": "video",
+                "label": "face",
+                "confidence": 0.9,
+                "mitigation": "blur",
+                "metadata": {"face_id": fid},
+            }
+            for fid in res.get("target_face_ids", [])
+        ]
+        redacted_entities = ["FACE"] if entities else []
+        audit_log = (
+            f"Selective face blur applied. Mode: {mode}. Selected IDs: {selected_faces}. "
+            f"Blurred face IDs: {res.get('target_face_ids', [])}. Frames processed: {res.get('total_frames', 0)}."
+        )
+
+        return {
+            "status": "success",
+            "decision": "allow",
+            "reason": None,
+            "download_url": relative_download_url,
+            "mitigated_output": str(output_path),
+            "faces_detected": res.get("faces_detected", 0),
+            "faces_blurred": res.get("faces_blurred", 0),
+            "selected_faces": selected_faces,
+            "mode": mode,
+            "audit_log": audit_log,
+            "entities": entities,
+            "redacted_entities": redacted_entities,
+            "artifacts": [str(output_path)],
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        _cleanup(scratch_dir)
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    if isinstance(exc, HTTPException):
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+    return JSONResponse(status_code=500, content={"detail": f"Internal server error: {exc}"})
 
 
 @app.get("/artifacts/download")
