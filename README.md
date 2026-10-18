@@ -4,13 +4,18 @@ LeakWatch is a privacy-preserving middleware designed during the UE23CS320A Caps
 
 ## Features
 - **Text Privacy Detection**: spaCy NER, regex heuristics, and rule graphs.
-- **Text Mitigation Strategies**: Masking, redaction, and synthetic replacements with audit trails.
+- **Text Mitigation Strategies**: Realistic Faker and synthetic identity generation (replacing names with realistic counterparts like "Raj", realistic emails, phones, and addresses) with deterministic caching and audit trails.
 - **Image Privacy Detection**: OpenCV 5.0-compatible ONNX YuNet deep face detector (`cv2.FaceDetectorYN`) with multi-angle rotation scanning, HSV color contour detection for ID cards, and OCR-assisted text scanning.
 - **Image Mitigation**: Facial blurring, synthetic text rewrites with typography/color matching, and explainability overlay generation.
 - **Video Privacy & Tracking Engine**: Reusable tracking engine (`leakwatch.video`) with velocity extrapolation, occlusion recovery, edge coasting, multi-face selection, inverted blur mode, and audio-preserving FFmpeg remuxing.
-- **Audio Mitigation**: Automatic speech-to-text transcription via Whisper or companion transcripts, beep tone redaction for sensitive windows, and normalization via FFmpeg.
-- **FastAPI REST Service**: Modular endpoints for text, image, audio, and video sanitization, including video face preview (`/scan/video/preview-faces`) and selective sanitization (`/scan/video/selective`).
-- **Manifest V3 Chrome Extension**: Interactive browser extension supporting Text (with ChatGPT/Gemini/Claude injection), Image, Audio, and Video (with interactive face selection grid and preview).
+- **Zero-Leak Video PII Redaction**: Dynamic ID card contour detection (`find_card_region`), card-relative normalized coordinate tracking, face anchor persistence (zero-dropout guarantee), and 90° CCW inpainting for vertical text orientations.
+- **Audio Privacy & Mitigation**: Speech-to-text via OpenAI Whisper with word-level timestamps and speaker overlap warnings, tone-masked beep redaction for sensitive windows, and auto-discovery of FFmpeg from venv/shim.
+- **FastAPI REST Service**: Modular endpoints for text, image, audio, and video sanitization, including video face preview (`/scan/video/preview-faces`), selective video sanitization (`/scan/video/selective`), and audio upload (`/scan/audio/upload`).
+- **Manifest V3 Chrome Extension**: Interactive browser extension supporting:
+  - **Text**: PII sanitization + 1-click prompt injection into ChatGPT, Gemini, and Claude.
+  - **Image**: Face and document redaction with side-by-side preview and downloads.
+  - **Audio**: Device file upload + live in-browser voice recording, pre-sanitization playback, and on-the-spot tone masking.
+  - **Video**: Interactive numbered face preview grid, selective face blurring toggle, blur slider, and in-popup player.
 - **Audit & Explainability**: JSONL audit logs, span reports, and annotated preview overlays.
 
 ## Repository Layout
@@ -102,7 +107,10 @@ LeakWatch includes a full Manifest V3 browser extension under [`extension/`](fil
 ### Multimodal Tabs:
 - **Text Tab**: Scans text for PII/secrets, replaces with synthetic entities, and features **one-click direct prompt injection** into ChatGPT (`chatgpt.com`), Google Gemini (`gemini.google.com`), and Anthropic Claude (`claude.ai`).
 - **Image Tab**: Redacts faces, Aadhaar cards, and document PII with side-by-side previews and direct download.
-- **Audio Tab**: Transcribes and censors voice recordings with audible beep tones.
+- **Audio Tab**:
+  - **Device Upload**: Upload `.wav`, `.mp3`, `.m4a`, `.aac`, `.flac`, `.ogg`, or `.webm` files.
+  - **Live Voice Recording**: Record voice directly inside the extension (`MediaRecorder`), listen to the recording before sanitizing, and sanitize on the spot with audible beep tones.
+  *(Note: Allow microphone permission once via `chrome://settings/content/microphone` or by visiting `chrome-extension://<id>/popup.html` in a tab).*
 - **Video Tab (Interactive Multi-Face Workflow)**:
   1. **Upload Video**: Automatically invokes `/scan/video/preview-faces` upon file selection.
   2. **Face Selector Grid**: Renders numbered face crop cards with checkboxes for visual selection.
@@ -152,7 +160,7 @@ LeakWatch ships with a FastAPI backend service (`service/app.py`).
 ## Testing
 Run the automated test suites:
 ```powershell
-# 1. Run core Pytest unit and integration suite (42 tests)
+# 1. Run core Pytest unit and integration suite (43 tests)
 python -m pytest tests/ -q
 
 # 2. Run Chrome Extension integrity and API integration suite (39 tests)
