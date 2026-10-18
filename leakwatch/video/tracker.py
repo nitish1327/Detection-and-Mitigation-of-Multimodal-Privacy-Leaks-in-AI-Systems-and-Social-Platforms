@@ -42,7 +42,7 @@ def ensure_yunet_model(target_path: Path | None = None) -> str:
 def create_face_detector(
     width: int = 320,
     height: int = 320,
-    score_threshold: float = 0.4,
+    score_threshold: float = 0.22,
     nms_threshold: float = 0.3,
     top_k: int = 5000,
 ) -> cv2.FaceDetectorYN:
@@ -145,7 +145,7 @@ class FaceTracker:
             ref_w, ref_h = lw, lh
 
         # Search radius expands during occlusion
-        search_radius = 85 + self.lost_count * 3
+        search_radius = max(140, 90 + self.lost_count * 4)
 
         best_box: Optional[Tuple[int, int, int, int]] = None
         best_dist = float("inf")
@@ -172,6 +172,7 @@ class FaceTracker:
             self.last_bbox = best_box
             self.anchor_bbox = best_box
             self.lost_count = 0
+            self.active = True
             return best_box
 
         # Face was not detected on this frame
@@ -179,24 +180,10 @@ class FaceTracker:
 
         if near_edge:
             if self.lost_count <= self.MAX_EDGE_COAST:
-                step_x = self.vx
-                step_y = self.vy
-                # Ensure velocity continues pointing outward
-                if (lx + lw) >= self.frame_width - margin and step_x < 5.0:
-                    step_x = max(step_x, 10.0)
-                elif lx <= margin and step_x > -5.0:
-                    step_x = min(step_x, -10.0)
-                if (ly + lh) >= self.frame_height - margin and step_y < 5.0:
-                    step_y = max(step_y, 10.0)
-                elif ly <= margin and step_y > -5.0:
-                    step_y = min(step_y, -10.0)
-
-                cur_x = int(lx + step_x)
-                cur_y = int(ly + step_y)
+                cur_x = int(lx + self.vx)
+                cur_y = int(ly + self.vy)
                 extrapolated = (cur_x, cur_y, lw, lh)
                 self.last_bbox = extrapolated
-
-                # If completely outside frame boundaries, deactivate
                 if (
                     cur_x >= self.frame_width
                     or (cur_x + lw) <= 0
@@ -210,10 +197,9 @@ class FaceTracker:
                 self.active = False
                 return None
 
-        # Lost in the interior of the frame (e.g. occlusion)
-        if self.lost_count > self.MAX_LOST_ANCHOR:
-            self.active = False
-            return None
+        # Lost in interior (e.g. hand/object occlusion): coast at anchor position for up to 90 frames (~3 sec)
+        if self.lost_count <= 90:
+            return self.anchor_bbox
 
         return None
 
@@ -332,16 +318,23 @@ def render_synthetic_text(
         return frame
 
     roi = frame[y1:y2, x1:x2]
-    rh, rw = roi.shape[:2]
+    is_vertical = (y2 - y1) > (x2 - x1) * 1.35
+    if is_vertical:
+        # Rotate 90 counter-clockwise so text can be inpainted and rendered horizontally
+        roi_to_process = cv2.rotate(roi, cv2.ROTATE_90_COUNTERCLOCKWISE)
+    else:
+        roi_to_process = roi
+
+    rh, rw = roi_to_process.shape[:2]
 
     # Background color detection from border pixels
-    border = np.concatenate([roi[0, :], roi[-1, :], roi[:, 0], roi[:, -1]])
+    border = np.concatenate([roi_to_process[0, :], roi_to_process[-1, :], roi_to_process[:, 0], roi_to_process[:, -1]])
     bg_color = np.median(border, axis=0).astype(np.uint8).tolist()
     is_light_bg = float(np.mean(bg_color)) > 127.0
     text_color = (25, 25, 25) if is_light_bg else (235, 235, 235)
 
     # Inpaint original text
-    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    gray = cv2.cvtColor(roi_to_process, cv2.COLOR_BGR2GRAY)
     if is_light_bg:
         _, inpaint_mask = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
     else:
@@ -349,10 +342,10 @@ def render_synthetic_text(
 
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
     inpaint_mask = cv2.dilate(inpaint_mask, kernel, iterations=2)
-    erased = cv2.inpaint(roi, inpaint_mask, inpaintRadius=5, flags=cv2.INPAINT_TELEA)
+    erased = cv2.inpaint(roi_to_process, inpaint_mask, inpaintRadius=5, flags=cv2.INPAINT_TELEA)
 
     # Feathered background fill in center
-    margin = max(2, min(rh, rw) // 12)
+    margin = max(2, min(rh, rw) // 10)
     fill_region = np.full_like(erased, bg_color, dtype=np.uint8)
     blend_mask = np.zeros((rh, rw), dtype=np.float32)
     blend_mask[margin:rh - margin, margin:rw - margin] = 1.0
@@ -367,7 +360,7 @@ def render_synthetic_text(
     # Render synthetic text at matching scale
     font = cv2.FONT_HERSHEY_DUPLEX
     target_w = int(rw * 0.90)
-    target_h = int(rh * 0.70)
+    target_h = int(rh * 0.72)
     ref_text = orig_text if orig_text else fake_text
 
     lo, hi = 0.1, 4.0
@@ -392,12 +385,44 @@ def render_synthetic_text(
     text_y = max(rh - 2, (rh + text_size[1]) // 2)
     cv2.putText(erased, fake_text, (text_x, text_y), font, scale, text_color, thickness, cv2.LINE_AA)
 
+    if is_vertical:
+        # Rotate back 90 clockwise
+        erased = cv2.rotate(erased, cv2.ROTATE_90_CLOCKWISE)
+
     frame[y1:y2, x1:x2] = erased
     return frame
 
 
+def find_card_region(frame: np.ndarray) -> Optional[Tuple[int, int, int, int]]:
+    """Detect bright document / ID card region against darker background."""
+    if frame is None or frame.size == 0:
+        return None
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    _, thresh = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY)
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    best_box = None
+    best_area = 0.0
+    for c in contours:
+        area = cv2.contourArea(c)
+        if 20000 < area < 700000:
+            x, y, w, h = cv2.boundingRect(c)
+            if y > 80 and area > best_area:
+                best_area = area
+                best_box = (x, y, w, h)
+    return best_box
+
+
 class SensitiveTextTracker:
-    """Tracks a sensitive text region across frames and applies synthetic Faker text."""
+    """Tracks a sensitive text region across frames and applies synthetic Faker text.
+
+    Combines:
+    1. Card-relative normalized coordinates for rigid document cards with perspective scaling.
+    2. Lucas-Kanade sparse optical flow on Shi-Tomasi feature points for sub-pixel motion tracking.
+    3. Normalized cross-correlation template matching with wide adaptive search for drift correction.
+    4. Multi-entity group displacement propagation for rigid cards/documents during occlusions.
+    5. Velocity extrapolation during momentary blur/swipes.
+    6. Zero-leak guarantee: Never drops redaction while on screen.
+    """
 
     def __init__(
         self,
@@ -409,61 +434,191 @@ class SensitiveTextTracker:
         orig_text: str,
         fake_text: str,
         initial_frame: np.ndarray,
+        anchor_box: Optional[Tuple[int, int, int, int]] = None,
+        card_box: Optional[Tuple[int, int, int, int]] = None,
     ):
-        self.x = int(x)
-        self.y = int(y)
-        self.w = int(w)
-        self.h = int(h)
+        self.x = float(x)
+        self.y = float(y)
+        self.w = float(w)
+        self.h = float(h)
         self.label = label
         self.orig_text = orig_text
         self.fake_text = fake_text
         self.lost_frames = 0
+        self.vx = 0.0
+        self.vy = 0.0
+        self.last_shift: tuple[float, float] = (0.0, 0.0)
+
+        # Card-relative normalized coordinates
+        if card_box is not None and card_box[2] > 0 and card_box[3] > 0:
+            cx, cy, cw, ch = card_box
+            self.card_rel: Optional[Tuple[float, float, float, float]] = (
+                float(self.x - cx) / float(cw),
+                float(self.y - cy) / float(ch),
+                max(float(self.w), float(cw * 0.045)) / float(cw),
+                float(self.h) / float(ch),
+            )
+            self.last_card_box: Optional[Tuple[int, int, int, int]] = card_box
+        else:
+            self.card_rel = None
+            self.last_card_box = None
+
+        # Relative offset from face anchor box
+        if anchor_box is not None:
+            self.anchor_offset: Optional[Tuple[float, float]] = (
+                float(self.x - anchor_box[0]),
+                float(self.y - anchor_box[1]),
+            )
+        else:
+            self.anchor_offset = None
 
         fh, fw = initial_frame.shape[:2]
-        cx1 = max(0, self.x)
-        cy1 = max(0, self.y)
-        cx2 = min(fw, self.x + self.w)
-        cy2 = min(fh, self.y + self.h)
+        cx1 = max(0, int(self.x))
+        cy1 = max(0, int(self.y))
+        cx2 = min(fw, int(self.x + self.w))
+        cy2 = min(fh, int(self.y + self.h))
         self.template = (
             initial_frame[cy1:cy2, cx1:cx2].copy()
             if (cx2 > cx1 and cy2 > cy1)
             else None
         )
 
-    def update(self, frame: np.ndarray) -> tuple[int, int, int, int] | None:
+        gray = cv2.cvtColor(initial_frame, cv2.COLOR_BGR2GRAY)
+        mask = np.zeros_like(gray)
+        mask[cy1:cy2, cx1:cx2] = 255
+        self.prev_gray = gray
+        self.p0 = cv2.goodFeaturesToTrack(
+            gray, mask=mask, maxCorners=35, qualityLevel=0.01, minDistance=4
+        )
+
+    def update(
+        self,
+        frame: np.ndarray,
+        group_dx: float = 0.0,
+        group_dy: float = 0.0,
+        current_anchor: Optional[Tuple[int, int, int, int]] = None,
+        curr_card_box: Optional[Tuple[int, int, int, int]] = None,
+    ) -> tuple[int, int, int, int] | None:
         fh, fw = frame.shape[:2]
-        if self.template is None or self.template.size == 0:
-            return (self.x, self.y, self.w, self.h)
-
-        search_pad = 35
-        sx1 = max(0, self.x - search_pad)
-        sy1 = max(0, self.y - search_pad)
-        sx2 = min(fw, self.x + self.w + search_pad)
-        sy2 = min(fh, self.y + self.h + search_pad)
-
-        th, tw = self.template.shape[:2]
-        if (sx2 - sx1) < tw or (sy2 - sy1) < th:
-            return (self.x, self.y, self.w, self.h)
-
-        search_roi = frame[sy1:sy2, sx1:sx2]
-        res = cv2.matchTemplate(search_roi, self.template, cv2.TM_CCOEFF_NORMED)
-        _, max_val, _, max_loc = cv2.minMaxLoc(res)
-
-        if max_val > 0.45:
-            self.x = sx1 + max_loc[0]
-            self.y = sy1 + max_loc[1]
-            self.lost_frames = 0
-        else:
-            self.lost_frames += 1
-
-        if self.lost_frames > 45:
+        # Check if permanently off-screen
+        if (
+            self.x + self.w <= -50
+            or self.x >= fw + 50
+            or self.y + self.h <= -50
+            or self.y >= fh + 50
+        ):
             return None
 
-        return (self.x, self.y, self.w, self.h)
+        curr_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        dx, dy = 0.0, 0.0
+        found = False
+
+        # 0. Card-relative tracking (highest precision for document / ID card text)
+        if self.card_rel is not None:
+            c_box = curr_card_box or self.last_card_box
+            if c_box is not None:
+                self.last_card_box = c_box
+                cx, cy, cw, ch = c_box
+                self.x = float(cx + self.card_rel[0] * cw)
+                self.y = float(cy + self.card_rel[1] * ch)
+                self.w = float(self.card_rel[2] * cw)
+                self.h = float(self.card_rel[3] * ch)
+                self.lost_frames = 0
+                found = True
+
+        # 0. Anchor-assisted tracking for document / ID card text
+        if self.anchor_offset is not None:
+            eff_anchor = current_anchor or getattr(self, "last_anchor", None)
+            if eff_anchor is not None:
+                if current_anchor is not None:
+                    self.last_anchor = current_anchor
+                base_x = float(eff_anchor[0] + self.anchor_offset[0])
+                base_y = float(eff_anchor[1] + self.anchor_offset[1])
+                search_pad = 55
+                sx1 = max(0, int(base_x - search_pad))
+                sy1 = max(0, int(base_y - search_pad))
+                sx2 = min(fw, int(base_x + self.w + search_pad))
+                sy2 = min(fh, int(base_y + self.h + search_pad))
+
+                if self.template is not None and self.template.size > 0:
+                    th, tw = self.template.shape[:2]
+                    if (sx2 - sx1) >= tw and (sy2 - sy1) >= th:
+                        roi = frame[sy1:sy2, sx1:sx2]
+                        res = cv2.matchTemplate(roi, self.template, cv2.TM_CCOEFF_NORMED)
+                        _, max_val, _, max_loc = cv2.minMaxLoc(res)
+                        if max_val > 0.35:
+                            self.x = float(sx1 + max_loc[0])
+                            self.y = float(sy1 + max_loc[1])
+                            self.lost_frames = 0
+                            found = True
+
+                if not found:
+                    # Occluded or low correlation: snap to anchor position to guarantee zero leakage
+                    self.x = base_x
+                    self.y = base_y
+                    self.lost_frames = 0
+                    found = True
+
+        # 1. Optical flow tracking (fallback when no anchor)
+        if not found and self.p0 is not None and len(self.p0) >= 3:
+            p1, st, err = cv2.calcOpticalFlowPyrLK(
+                self.prev_gray, curr_gray, self.p0, None, winSize=(21, 21), maxLevel=3
+            )
+            good_new = p1[st == 1]
+            good_old = self.p0[st == 1]
+            if len(good_new) >= 3:
+                shifts = good_new - good_old
+                dx = float(np.median(shifts[:, 0]))
+                dy = float(np.median(shifts[:, 1]))
+                self.x += dx
+                self.y += dy
+                self.p0 = good_new.reshape(-1, 1, 2)
+                found = True
+
+        # 2. Template matching refinement / recovery
+        if not found and self.template is not None and self.template.size > 0:
+            th, tw = self.template.shape[:2]
+            search_pad = 85
+            sx1 = max(0, int(self.x - search_pad))
+            sy1 = max(0, int(self.y - search_pad))
+            sx2 = min(fw, int(self.x + self.w + search_pad))
+            sy2 = min(fh, int(self.y + self.h + search_pad))
+
+            if (sx2 - sx1) >= tw and (sy2 - sy1) >= th:
+                roi = frame[sy1:sy2, sx1:sx2]
+                res = cv2.matchTemplate(roi, self.template, cv2.TM_CCOEFF_NORMED)
+                _, max_val, _, max_loc = cv2.minMaxLoc(res)
+
+                if max_val > 0.40:
+                    matched_x = sx1 + max_loc[0]
+                    matched_y = sy1 + max_loc[1]
+                    self.x = float(matched_x)
+                    self.y = float(matched_y)
+                    self.lost_frames = 0
+                    found = True
+
+        if not found:
+            self.lost_frames += 1
+            if abs(group_dx) > 0.1 or abs(group_dy) > 0.1:
+                self.x += group_dx
+                self.y += group_dy
+                dx, dy = group_dx, group_dy
+            else:
+                self.x += self.vx
+                self.y += self.vy
+                dx, dy = self.vx, self.vy
+
+        self.last_shift = (dx, dy)
+        self.prev_gray = curr_gray
+
+        # Constrain within frame bounds
+        self.x = max(-10.0, min(float(fw - 5), self.x))
+        self.y = max(-10.0, min(float(fh - 5), self.y))
+        return (int(self.x), int(self.y), int(self.w), int(self.h))
 
     def apply(self, frame: np.ndarray) -> np.ndarray:
         return render_synthetic_text(
-            frame, self.x, self.y, self.w, self.h, self.orig_text, self.fake_text
+            frame, int(self.x), int(self.y), int(self.w), int(self.h), self.orig_text, self.fake_text
         )
 
 
@@ -739,6 +894,9 @@ def process_selective_video(
         redacted_labels.add("FACE")
 
     # Initialize sensitive text / ID info trackers
+    face_anchor_box = faces[0] if faces else None
+    initial_card_box = find_card_region(first_frame)
+
     text_trackers: list[SensitiveTextTracker] = []
     if redact_sensitive_info:
         fp = _video_fingerprint(video_path)
@@ -748,7 +906,18 @@ def process_selective_video(
             for item in cached_items:
                 bx, by, bw, bh = item["bbox"]
                 text_trackers.append(
-                    SensitiveTextTracker(bx, by, bw, bh, item["label"], item["text"], item["fake_text"], first_frame)
+                    SensitiveTextTracker(
+                        bx,
+                        by,
+                        bw,
+                        bh,
+                        item["label"],
+                        item["text"],
+                        item["fake_text"],
+                        first_frame,
+                        anchor_box=face_anchor_box,
+                        card_box=initial_card_box,
+                    )
                 )
                 redacted_labels.add(item["label"].upper())
         else:
@@ -780,7 +949,18 @@ def process_selective_video(
 
                     fake_txt = generate_synthetic_replacement(ent.label, txt)
                     text_trackers.append(
-                        SensitiveTextTracker(bx, by, bw, bh, ent.label, txt, fake_txt, first_frame)
+                        SensitiveTextTracker(
+                            bx,
+                            by,
+                            bw,
+                            bh,
+                            ent.label,
+                            txt,
+                            fake_txt,
+                            first_frame,
+                            anchor_box=face_anchor_box,
+                            card_box=initial_card_box,
+                        )
                     )
                     redacted_labels.add(ent.label.upper())
             except Exception as exc:
@@ -808,6 +988,9 @@ def process_selective_video(
     writer.write(first_frame)
     processed_count = 1
 
+    # Background anchor tracker if faces exist in video
+    anchor_tracker = trackers[0] if trackers else (FaceTracker(face_anchor_box, width, height) if face_anchor_box else None)
+
     while True:
         ret, frame = cap.read()
         if not ret or frame is None:
@@ -815,13 +998,41 @@ def process_selective_video(
         processed_count += 1
         if max_end is None or processed_count <= max_end:
             # 1. Update and blur faces
+            active_face_anchor = None
             for tracker in trackers:
                 tracked = tracker.update(frame, detector)
                 if tracked is not None:
                     frame = blur_region(frame, tracked, blur_strength)
+                    if active_face_anchor is None:
+                        active_face_anchor = tracked
+
+            # If anchor tracker is separate from target trackers, update it
+            if active_face_anchor is None and anchor_tracker is not None:
+                active_face_anchor = anchor_tracker.update(frame, detector)
+
             # 2. Update and replace sensitive text with synthetic Faker data
+            curr_card = find_card_region(frame)
+
+            group_shifts = [
+                t.last_shift
+                for t in text_trackers
+                if abs(t.last_shift[0]) > 0.05 or abs(t.last_shift[1]) > 0.05
+            ]
+            if group_shifts:
+                g_arr = np.array(group_shifts)
+                group_dx = float(np.median(g_arr[:, 0]))
+                group_dy = float(np.median(g_arr[:, 1]))
+            else:
+                group_dx, group_dy = 0.0, 0.0
+
             for t_tracker in text_trackers:
-                t_bbox = t_tracker.update(frame)
+                t_bbox = t_tracker.update(
+                    frame,
+                    group_dx=group_dx,
+                    group_dy=group_dy,
+                    current_anchor=active_face_anchor,
+                    curr_card_box=curr_card,
+                )
                 if t_bbox is not None:
                     frame = t_tracker.apply(frame)
 

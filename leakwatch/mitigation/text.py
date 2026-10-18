@@ -77,80 +77,96 @@ class TextMitigator:
         style = self.config.mask_style
         label = entity.label.upper()
 
-        if style == "faker" and self.faker and entity.text:
+        if style in {"faker", "synthetic"} and entity.text:
             if entity.text not in self._faker_cache:
                 self._faker_cache[entity.text] = self._generate_faker_value(entity)
             return self._faker_cache[entity.text]
 
         if style == "asterisks":
             return "*" * (len(entity.text or "REDACTED"))
-        if style == "synthetic":
-            return f"<{label}>"
-        return f"[REDACTED:{label}]"
+        if style == "brackets":
+            return f"[REDACTED:{label}]"
+        return self._generate_faker_value(entity)
 
     def _generate_faker_value(self, entity: DetectedEntity) -> str:
         """Generate a realistic fake value based on the entity label."""
-        if not self.faker:
-            return f"<{entity.label.upper()}>"
-
         label = entity.label.upper()
-        
-        # Identity & Contact
+
+        # Try dynamic Faker generation if available
+        if self.faker:
+            try:
+                # Identity & Contact
+                if "PERSON" in label or "NAME" in label:
+                    gender = entity.metadata.get("gender")
+                    if gender == "male":
+                        return self.faker.name_male()
+                    elif gender == "female":
+                        return self.faker.name_female()
+                    return self.faker.name()
+                if "EMAIL" in label:
+                    return self.faker.email()
+                if "PHONE" in label or "TELEPHONE" in label:
+                    return self.faker.phone_number()
+                if "USER_NAME" in label:
+                    return self.faker.user_name()
+                if "PASSWORD" in label:
+                    return self.faker.password()
+                    
+                # Location & Network
+                if "ORG" in label or "COMPANY" in label:
+                    return self.faker.company()
+                if "GPE" in label or "LOCATION" in label or "CITY" in label:
+                    return self.faker.city()
+                if "ADDRESS" in label or "STREET" in label:
+                    return self.faker.address().replace("\n", ", ")
+                if "ZIP" in label:
+                    return self.faker.zipcode()
+                if "IP" in label or "IPV4" in label or "IPV6" in label:
+                    return self.faker.ipv4()
+                if "MAC" in label:
+                    return self.faker.mac_address()
+                if "URL" in label:
+                    return self.faker.url()
+
+                # Financial & IDs
+                if "CREDIT" in label or "CARD_NUMBER" in label:
+                    return self.faker.credit_card_number()
+                if "IBAN" in label:
+                    return self.faker.iban()
+                if "SWIFT" in label:
+                    return self.faker.swift()
+                if "SSN" in label or "AADHAR" in label:
+                    return self.faker.ssn()
+                if "PASSPORT" in label:
+                    return self.faker.passport_number()
+                    
+                # Misc
+                if "DATE" in label:
+                    return str(self.faker.date())
+                if "CARDINAL" in label or "NUMBER" in label:
+                    return str(self.faker.random_int(min=100000, max=999999))
+                if "LICENSE" in label:
+                    if "PLATE" in label:
+                        return self.faker.license_plate()
+            except Exception:
+                pass
+
+        # Robust realistic fallback pool if faker is missing or raises an exception
         if "PERSON" in label or "NAME" in label:
-            gender = entity.metadata.get("gender")
-            if gender == "male":
-                return self.faker.name_male()
-            elif gender == "female":
-                return self.faker.name_female()
-            return self.faker.name()
+            return "Raj"
         if "EMAIL" in label:
-            return self.faker.email()
+            return "raj.kumar@example.com"
         if "PHONE" in label or "TELEPHONE" in label:
-            return self.faker.phone_number()
-        if "USER_NAME" in label:
-            return self.faker.user_name()
-        if "PASSWORD" in label:
-            return self.faker.password()
-            
-        # Location & Network
-        if "ORG" in label or "COMPANY" in label:
-            return self.faker.company()
-        if "GPE" in label or "LOCATION" in label or "CITY" in label:
-            return self.faker.city()
+            return "+91 98765 43210"
         if "ADDRESS" in label or "STREET" in label:
-            return self.faker.address().replace("\n", ", ")
-        if "ZIP" in label:
-            return self.faker.zipcode()
-        if "IP" in label or "IPV4" in label or "IPV6" in label:
-            return self.faker.ipv4()
-        if "MAC" in label:
-            return self.faker.mac_address()
-        if "URL" in label:
-            return self.faker.url()
-
-        # Financial & IDs
-        if "CREDIT" in label or "CARD_NUMBER" in label:
-            return self.faker.credit_card_number()
-        if "IBAN" in label:
-            return self.faker.iban()
-        if "SWIFT" in label:
-            return self.faker.swift()
-        if "SSN" in label or "AADHAR" in label:
-            return self.faker.ssn()
-        if "PASSPORT" in label:
-            return self.faker.passport_number()
-            
-        # Misc
-        if "DATE" in label:
-            return str(self.faker.date())
-        if "CARDINAL" in label or "NUMBER" in label:
-            return str(self.faker.random_int(min=0, max=999999))
-        if "LICENSE" in label:
-            if "PLATE" in label:
-                return self.faker.license_plate()
-            return self.faker.bothify("??## #### #######", letters="ABCDEFGHIJKLMNOPQRSTUVWXYZ")
-
-        return f"<{label}>"
+            return "123 MG Road, Bengaluru"
+        if "ORG" in label or "COMPANY" in label:
+            return "TechCorp Global"
+        if "CREDIT" in label or "CARD" in label:
+            return "4532 **** **** 8821"
+        if "ID" in label or "NUMBER" in label:
+            return "ID556759"
+        return "CONFIDENTIAL"
 
     def _merge_overlapping_spans(self, entities: list[DetectedEntity]) -> list[DetectedEntity]:
         """Merge overlapping or nested entity spans to prevent mitigation corruption."""
