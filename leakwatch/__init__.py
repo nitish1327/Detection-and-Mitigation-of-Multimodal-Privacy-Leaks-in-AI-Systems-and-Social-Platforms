@@ -11,6 +11,12 @@ def _ensure_ffmpeg_on_path() -> None:
     if shutil.which("ffmpeg"):
         return
 
+    import sys
+    scripts_dir = Path(sys.prefix) / "Scripts"
+    if (scripts_dir / "ffmpeg.exe").exists() or (scripts_dir / "ffmpeg").exists():
+        os.environ["PATH"] = str(scripts_dir) + os.pathsep + os.environ.get("PATH", "")
+        return
+
     root = Path(__file__).resolve().parent.parent
     shim_dir = root / ".ffmpeg_shim"
     if (shim_dir / "ffmpeg.exe").exists() or (shim_dir / "ffmpeg").exists():
