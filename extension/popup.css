@@ -651,3 +651,90 @@ input[type="file"]::file-selector-button {
   cursor: pointer;
 }
 
+/* ---- Audio Recording & In-Extension Preview ---- */
+.audio-record-divider {
+  display: flex;
+  align-items: center;
+  text-align: center;
+  margin: 12px 0 8px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+
+.audio-record-divider::before,
+.audio-record-divider::after {
+  content: "";
+  flex: 1;
+  border-bottom: 1px solid var(--border);
+}
+
+.audio-record-divider span {
+  padding: 0 8px;
+}
+
+.audio-record-box {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px;
+  margin-bottom: 10px;
+}
+
+.audio-record-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.record-btn {
+  margin-top: 0;
+  width: auto;
+  min-width: 130px;
+}
+
+.record-btn.recording {
+  background: rgba(239, 68, 68, 0.2);
+  border-color: #ef4444;
+  color: #f87171;
+  animation: pulse-red 1.2s infinite ease-in-out;
+}
+
+@keyframes pulse-red {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(239, 68, 68, 0);
+  }
+}
+
+.record-timer {
+  font-family: monospace;
+  font-size: 13px;
+  font-weight: 700;
+  color: #f87171;
+  padding: 2px 6px;
+  background: rgba(239, 68, 68, 0.1);
+  border-radius: 4px;
+}
+
+.recorded-preview-box {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+}
+
+.recorded-preview-box .label {
+  display: block;
+  font-size: 11px;
+  margin-bottom: 4px;
+  color: #93c5fd;
+}
+
+.audio-player-compact {
+  height: 36px;
+  margin-top: 4px;
+}
+

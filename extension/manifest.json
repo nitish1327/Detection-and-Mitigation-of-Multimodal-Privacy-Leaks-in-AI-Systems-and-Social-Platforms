@@ -6,7 +6,8 @@
   "permissions": [
     "activeTab",
     "scripting",
-    "clipboardWrite"
+    "clipboardWrite",
+    "audioCapture"
   ],
   "host_permissions": [
     "http://localhost:8000/*",

@@ -129,9 +129,30 @@
         <input
           id="audio-input"
           type="file"
-          accept=".wav,.mp3,.m4a,.aac,.flac,.ogg,.opus,audio/*"
+          accept=".wav,.mp3,.m4a,.aac,.flac,.ogg,.opus,.webm,audio/*"
         />
-        <p class="muted file-hint">Supported: WAV, MP3, M4A, AAC, FLAC, OGG</p>
+        <p class="muted file-hint">Supported: WAV, MP3, M4A, AAC, FLAC, OGG, WebM</p>
+
+        <!-- RECORD AUDIO SECTION -->
+        <div class="audio-record-divider">
+          <span>OR RECORD VOICE</span>
+        </div>
+
+        <div class="audio-record-box">
+          <div class="audio-record-controls">
+            <button id="audio-record-btn" type="button" class="btn btn-secondary record-btn">
+              <span id="audio-record-icon" class="record-icon">🎙️</span>
+              <span id="audio-record-label">Record Voice</span>
+            </button>
+            <span id="audio-record-timer" class="record-timer hidden">00:00</span>
+          </div>
+
+          <div id="audio-recorded-container" class="recorded-preview-box hidden">
+            <span class="label">Recorded audio (listen before sanitizing):</span>
+            <audio id="audio-recorded-player" controls class="media-player audio-player-compact"></audio>
+          </div>
+        </div>
+
         <button id="audio-sanitize-btn" type="button" class="btn btn-primary" disabled>
           Sanitize Audio
         </button>

@@ -33,6 +33,7 @@ const SUPPORTED_AUDIO_TYPES = new Set([
   "audio/flac",
   "audio/ogg",
   "audio/opus",
+  "audio/webm",
 ]);
 
 const SUPPORTED_VIDEO_TYPES = new Set([
@@ -77,6 +78,12 @@ const sanitizedAudioEl = document.getElementById("sanitized-audio");
 const audioEntitiesList = document.getElementById("audio-entities-list");
 const audioNoEntities = document.getElementById("audio-no-entities");
 const audioDownloadBtn = document.getElementById("audio-download-btn");
+const audioRecordBtn = document.getElementById("audio-record-btn");
+const audioRecordIcon = document.getElementById("audio-record-icon");
+const audioRecordLabel = document.getElementById("audio-record-label");
+const audioRecordTimer = document.getElementById("audio-record-timer");
+const audioRecordedContainer = document.getElementById("audio-recorded-container");
+const audioRecordedPlayer = document.getElementById("audio-recorded-player");
 
 // Video tab
 const videoInput = document.getElementById("video-input");
@@ -111,6 +118,13 @@ let selectedAudioFile = null;
 let sanitizedAudioUrl = null;
 let sanitizedAudioBlob = null;
 let sanitizedAudioDownloadName = "sanitized.wav";
+let mediaRecorder = null;
+let audioRecordStream = null;
+let audioRecordChunks = [];
+let audioRecordTimerInterval = null;
+let audioRecordSeconds = 0;
+let recordedAudioUrl = null;
+let isRecordingAudio = false;
 
 let selectedVideoFile = null;
 let sanitizedVideoUrl = null;
@@ -610,6 +624,9 @@ function initAudioTab() {
   audioInput.addEventListener("change", handleAudioSelected);
   audioSanitizeBtn.addEventListener("click", handleAudioSanitize);
   audioDownloadBtn.addEventListener("click", handleDownloadAudio);
+  if (audioRecordBtn) {
+    audioRecordBtn.addEventListener("click", handleToggleAudioRecording);
+  }
 }
 
 function revokeAudioUrls() {
@@ -617,12 +634,26 @@ function revokeAudioUrls() {
     URL.revokeObjectURL(sanitizedAudioUrl);
     sanitizedAudioUrl = null;
   }
+  if (recordedAudioUrl) {
+    URL.revokeObjectURL(recordedAudioUrl);
+    recordedAudioUrl = null;
+  }
   sanitizedAudioBlob = null;
 }
 
 function handleAudioSelected(event) {
   clearError();
   revokeAudioUrls();
+  if (isRecordingAudio) {
+    stopAudioRecording();
+  }
+  resetAudioRecordButton();
+  if (audioRecordedContainer) {
+    audioRecordedContainer.classList.add("hidden");
+  }
+  if (audioRecordedPlayer) {
+    audioRecordedPlayer.removeAttribute("src");
+  }
   audioDownloadBtn.disabled = true;
   sanitizedAudioEl.removeAttribute("src");
 
@@ -637,6 +668,155 @@ function handleAudioSelected(event) {
   selectedAudioFile = file;
   audioSanitizeBtn.disabled = false;
   audioPreviewPanel.classList.add("hidden");
+}
+
+async function handleToggleAudioRecording() {
+  clearError();
+  if (isRecordingAudio) {
+    stopAudioRecording();
+  } else {
+    await startAudioRecording();
+  }
+}
+
+async function startAudioRecording() {
+  try {
+    audioRecordStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (err) {
+    showError("Microphone access denied or unavailable: " + (err.message || err.name));
+    return;
+  }
+
+  // Clear file input if a file was selected previously
+  if (audioInput) {
+    audioInput.value = "";
+  }
+  if (recordedAudioUrl) {
+    URL.revokeObjectURL(recordedAudioUrl);
+    recordedAudioUrl = null;
+  }
+  if (audioRecordedPlayer) {
+    audioRecordedPlayer.removeAttribute("src");
+  }
+  if (audioRecordedContainer) {
+    audioRecordedContainer.classList.add("hidden");
+  }
+  audioPreviewPanel.classList.add("hidden");
+  selectedAudioFile = null;
+  audioSanitizeBtn.disabled = true;
+
+  audioRecordChunks = [];
+  const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+    ? "audio/webm;codecs=opus"
+    : (MediaRecorder.isTypeSupported("audio/ogg;codecs=opus") ? "audio/ogg;codecs=opus" : "");
+
+  const options = mimeType ? { mimeType } : {};
+
+  try {
+    mediaRecorder = new MediaRecorder(audioRecordStream, options);
+  } catch (e) {
+    mediaRecorder = new MediaRecorder(audioRecordStream);
+  }
+
+  mediaRecorder.ondataavailable = (e) => {
+    if (e.data && e.data.size > 0) {
+      audioRecordChunks.push(e.data);
+    }
+  };
+
+  mediaRecorder.onstop = () => {
+    if (audioRecordStream) {
+      audioRecordStream.getTracks().forEach((track) => track.stop());
+      audioRecordStream = null;
+    }
+
+    if (audioRecordTimerInterval) {
+      clearInterval(audioRecordTimerInterval);
+      audioRecordTimerInterval = null;
+    }
+
+    const recordedMime = mediaRecorder.mimeType || "audio/webm";
+    const extension = recordedMime.includes("ogg") ? "ogg" : "webm";
+    const audioBlob = new Blob(audioRecordChunks, { type: recordedMime });
+
+    if (audioBlob.size === 0) {
+      showError("Recording was empty. Try speaking into the microphone.");
+      resetAudioRecordButton();
+      return;
+    }
+
+    const filename = `voice_recording_${Date.now()}.${extension}`;
+    selectedAudioFile = new File([audioBlob], filename, { type: recordedMime });
+
+    // Show playback so user can listen to the recorded audio
+    if (recordedAudioUrl) {
+      URL.revokeObjectURL(recordedAudioUrl);
+    }
+    recordedAudioUrl = URL.createObjectURL(audioBlob);
+    if (audioRecordedPlayer) {
+      audioRecordedPlayer.src = recordedAudioUrl;
+    }
+    if (audioRecordedContainer) {
+      audioRecordedContainer.classList.remove("hidden");
+    }
+
+    // Enable sanitization button
+    audioSanitizeBtn.disabled = false;
+    resetAudioRecordButton();
+  };
+
+  mediaRecorder.start(250);
+  isRecordingAudio = true;
+  if (audioRecordBtn) {
+    audioRecordBtn.classList.add("recording");
+  }
+  if (audioRecordLabel) {
+    audioRecordLabel.textContent = "Stop Recording";
+  }
+  if (audioRecordIcon) {
+    audioRecordIcon.textContent = "⏹️";
+  }
+  if (audioRecordTimer) {
+    audioRecordTimer.classList.remove("hidden");
+    audioRecordTimer.textContent = "00:00";
+  }
+  audioRecordSeconds = 0;
+
+  audioRecordTimerInterval = setInterval(() => {
+    audioRecordSeconds += 1;
+    const mins = String(Math.floor(audioRecordSeconds / 60)).padStart(2, "0");
+    const secs = String(audioRecordSeconds % 60).padStart(2, "0");
+    if (audioRecordTimer) {
+      audioRecordTimer.textContent = `${mins}:${secs}`;
+    }
+  }, 1000);
+}
+
+function stopAudioRecording() {
+  if (mediaRecorder && mediaRecorder.state !== "inactive") {
+    mediaRecorder.stop();
+  }
+  isRecordingAudio = false;
+}
+
+function resetAudioRecordButton() {
+  isRecordingAudio = false;
+  if (audioRecordBtn) {
+    audioRecordBtn.classList.remove("recording");
+  }
+  if (audioRecordLabel) {
+    audioRecordLabel.textContent = "Record Voice";
+  }
+  if (audioRecordIcon) {
+    audioRecordIcon.textContent = "🎙️";
+  }
+  if (audioRecordTimer) {
+    audioRecordTimer.classList.add("hidden");
+  }
+  if (audioRecordTimerInterval) {
+    clearInterval(audioRecordTimerInterval);
+    audioRecordTimerInterval = null;
+  }
 }
 
 async function handleAudioSanitize() {
