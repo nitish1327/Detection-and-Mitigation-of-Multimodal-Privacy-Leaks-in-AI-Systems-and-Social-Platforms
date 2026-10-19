@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import subprocess
 import shutil
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, List, Mapping
@@ -35,11 +36,13 @@ class AudioAdapter:
 		whisper_model: str = "base",
 		app_mode: str = "cli",
 		transcriber: Callable[[Path], str] | None = None,
+		ffmpeg_binary: str = "ffmpeg",
 	) -> None:
 		self.transcript_extension = transcript_extension
 		self.enable_transcription = enable_transcription
 		self.transcription_backend = transcription_backend
 		self.whisper_model = whisper_model
+		self.ffmpeg_binary = ffmpeg_binary
 		self.app_mode = app_mode
 		self._transcriber = transcriber
 		self._whisper_model_obj: Any | None = None
@@ -74,8 +77,14 @@ class AudioAdapter:
 			if isinstance(result, dict):
 				self._update_speaker_flags(result)
 				self.last_word_timestamps = self._extract_word_alignment(result)
-				return str(result.get("text", "")).strip()
-			return str(result).strip()
+				text = str(result.get("text", "")).strip()
+			else:
+				text = str(result).strip()
+			if not text:
+				raise RuntimeError(
+					"No speech was detected in the uploaded audio. Please record or upload audio with clear speech and try again."
+				)
+			return text
 
 		backend = self.transcription_backend.lower().strip()
 		if backend != "whisper":
@@ -92,13 +101,82 @@ class AudioAdapter:
 		if self._whisper_model_obj is None:
 			self._whisper_model_obj = whisper.load_model(self.whisper_model)
 
-		transcript = self._whisper_model_obj.transcribe(str(audio_path), fp16=False, word_timestamps=True)
+		normalized_path: Path | None = None
+		transcription_path = audio_path
+		if audio_path.suffix.lower() in {".webm", ".ogg", ".opus"}:
+			normalized_path = self._normalize_for_transcription(audio_path)
+			transcription_path = normalized_path
+
+		try:
+			transcript = self._whisper_model_obj.transcribe(
+				str(transcription_path), fp16=False, word_timestamps=True
+			)
+		finally:
+			if normalized_path is not None:
+				normalized_path.unlink(missing_ok=True)
+
 		self._update_speaker_flags(transcript)
 		self.last_word_timestamps = self._extract_word_alignment(transcript)
 		text = str(transcript.get("text", "")).strip()
 		if not text:
-			raise RuntimeError(f"Transcription produced empty text for {audio_path.name}")
+			raise RuntimeError(
+				"No speech was detected in the uploaded audio. Please record or upload audio with clear speech and try again."
+			)
 		return text
+
+	def _normalize_for_transcription(self, audio_path: Path) -> Path:
+		"""Decode browser-recorded Opus containers into Whisper-ready PCM WAV."""
+		candidates: list[str] = []
+		system_ffmpeg = shutil.which(self.ffmpeg_binary)
+		if system_ffmpeg:
+			candidates.append(system_ffmpeg)
+		try:
+			from imageio_ffmpeg import get_ffmpeg_exe
+
+			bundled_ffmpeg = get_ffmpeg_exe()
+			if bundled_ffmpeg and Path(bundled_ffmpeg).exists() and bundled_ffmpeg not in candidates:
+				candidates.append(bundled_ffmpeg)
+		except ImportError:
+			pass
+
+		if not candidates:
+			raise RuntimeError(
+				"FFmpeg is required to decode WebM/Opus audio for transcription. Install ffmpeg or imageio-ffmpeg."
+			)
+
+		with tempfile.NamedTemporaryFile(prefix="leakwatch_transcription_", suffix=".wav", delete=False) as handle:
+			wav_path = Path(handle.name)
+
+		failures: list[str] = []
+		for ffmpeg in candidates:
+			command = [
+				ffmpeg,
+				"-y",
+				"-i",
+				str(audio_path),
+				"-vn",
+				"-ac",
+				"1",
+				"-ar",
+				"16000",
+				"-af",
+				"loudnorm=I=-16:TP=-1.5:LRA=11",
+				"-c:a",
+				"pcm_s16le",
+				str(wav_path),
+			]
+			try:
+				result = subprocess.run(command, capture_output=True, text=True)
+			except FileNotFoundError as exc:
+				failures.append(f"{ffmpeg}: {exc}")
+				continue
+			if result.returncode == 0 and wav_path.exists() and wav_path.stat().st_size > 44:
+				return wav_path
+			failures.append(f"{ffmpeg}: {result.stderr.strip()}")
+
+		wav_path.unlink(missing_ok=True)
+		detail = " | ".join(failures)
+		raise RuntimeError(f"Could not decode uploaded {audio_path.suffix[1:].upper()} audio for transcription: {detail}")
 
 	def _extract_word_alignment(self, transcript_dict: dict[str, Any]) -> list[dict[str, Any]]:
 		if not isinstance(transcript_dict, dict):

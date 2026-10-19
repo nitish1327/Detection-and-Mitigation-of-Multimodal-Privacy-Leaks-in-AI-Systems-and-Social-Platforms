@@ -80,7 +80,7 @@ This creates `icons/icon16.png`, `icon48.png`, and `icon128.png`.
 |----------|----------|
 | Network | `localhost:8000` only — no external cloud calls |
 | Storage | No `chrome.storage`, no cookies, no telemetry |
-| Permissions | `activeTab`, `scripting`, `clipboardWrite` + host permissions for LLM sites |
+| Permissions | `sidePanel`, `clipboardWrite` + host permissions for the local API and supported LLM sites |
 | Data flow | Text/images leave the browser only to your local LeakWatch instance |
 | Image memory | Object URLs revoked after use; no persistent image storage in extension |
 

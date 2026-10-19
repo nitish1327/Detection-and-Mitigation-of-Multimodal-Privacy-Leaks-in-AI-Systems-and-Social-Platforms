@@ -63,6 +63,13 @@
           <h3 class="section-title">Detected entities</h3>
           <ul id="entities-list" class="entities-list"></ul>
           <p id="no-entities" class="muted hidden">No sensitive entities detected.</p>
+          <div id="entity-selection-controls" class="entity-selection-controls hidden">
+            <div class="entity-selection-actions">
+              <button id="select-all-entities-btn" type="button" class="btn btn-secondary">Select All</button>
+              <button id="clear-all-entities-btn" type="button" class="btn btn-secondary">Clear All</button>
+            </div>
+            <button id="apply-mitigation-btn" type="button" class="btn btn-primary" disabled>Apply Mitigation</button>
+          </div>
         </div>
 
         <div class="actions">

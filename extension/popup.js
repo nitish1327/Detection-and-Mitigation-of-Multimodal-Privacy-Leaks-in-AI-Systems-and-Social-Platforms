@@ -59,6 +59,10 @@ const originalPreview = document.getElementById("original-preview");
 const sanitizedPreview = document.getElementById("sanitized-preview");
 const entitiesList = document.getElementById("entities-list");
 const noEntities = document.getElementById("no-entities");
+const entitySelectionControls = document.getElementById("entity-selection-controls");
+const selectAllEntitiesBtn = document.getElementById("select-all-entities-btn");
+const clearAllEntitiesBtn = document.getElementById("clear-all-entities-btn");
+const applyMitigationBtn = document.getElementById("apply-mitigation-btn");
 
 // Image tab
 const imageInput = document.getElementById("image-input");
@@ -108,6 +112,9 @@ const tabButtons = document.querySelectorAll(".tab");
 const tabPanels = document.querySelectorAll(".tab-panel");
 
 let sanitizedText = "";
+let originalText = "";
+let detectedEntities = [];
+let selectedEntityTypes = new Set();
 let selectedImageFile = null;
 let originalImageUrl = null;
 let sanitizedImageUrl = null;
@@ -140,6 +147,16 @@ document.addEventListener("DOMContentLoaded", () => {
   initImageTab();
   initAudioTab();
   initVideoTab();
+});
+
+chrome.runtime.onMessage.addListener((message) => {
+  if (message?.type !== "MIC_PERMISSION_COMPLETED") return false;
+  if (message.granted) {
+    void startAudioRecording();
+  } else {
+    showError("Microphone permission denied. Allow Privacy Sandbox in Chrome's microphone settings (chrome://settings/content/microphone), then click Record Voice again.");
+  }
+  return false;
 });
 
 window.addEventListener("unload", () => {
@@ -260,28 +277,38 @@ async function parseJsonResponse(response) {
 
 function initTextTab() {
   sanitizeBtn.addEventListener("click", handleSanitize);
+  selectAllEntitiesBtn.addEventListener("click", () => setAllEntityTypesSelected(true));
+  clearAllEntitiesBtn.addEventListener("click", () => setAllEntityTypesSelected(false));
+  applyMitigationBtn.addEventListener("click", handleApplyTextMitigation);
   copyBtn.addEventListener("click", handleCopy);
   sendBtn.addEventListener("click", handleSendToLlm);
 }
 
 async function handleSanitize() {
-  const text = inputText.value.trim();
+  const text = inputText.value;
   clearError();
 
-  if (!text) {
+  if (!text.trim()) {
     showError("Enter some text to sanitize.");
     return;
   }
 
+  originalText = text;
+  detectedEntities = [];
+  selectedEntityTypes = new Set();
+  sanitizedText = text;
   sanitizeBtn.classList.add("loading");
   sanitizeBtn.textContent = "Sanitizing…";
   copyBtn.disabled = true;
   sendBtn.disabled = true;
+  applyMitigationBtn.disabled = true;
 
   try {
-    const result = await sanitizeText(text);
-    sanitizedText = result.sanitized_text || text;
-    renderTextPreview(text, sanitizedText, result.redacted_entities || []);
+    const result = await requestTextScan(text, { detect_only: true });
+    detectedEntities = Array.isArray(result.entities) ? result.entities : [];
+    selectedEntityTypes = new Set(detectedEntities.map((entity) => String(entity.label).toUpperCase()));
+    renderTextPreview(originalText, originalText);
+    renderSelectableTextEntities();
     setBackendStatus("ok");
   } catch (error) {
     showError(error.message);
@@ -290,16 +317,88 @@ async function handleSanitize() {
   } finally {
     sanitizeBtn.classList.remove("loading");
     sanitizeBtn.textContent = "Sanitize";
+    applyMitigationBtn.disabled = detectedEntities.length === 0;
   }
 }
 
-async function sanitizeText(text) {
+async function handleApplyTextMitigation() {
+  if (!originalText) {
+    showError("Run a text scan before applying mitigation.");
+    return;
+  }
+
+  clearError();
+  applyMitigationBtn.disabled = true;
+  applyMitigationBtn.classList.add("loading");
+  applyMitigationBtn.textContent = "Applying…";
+  try {
+    const result = await requestTextScan(originalText, {
+      selected_entity_types: [...selectedEntityTypes],
+    });
+    sanitizedText = result.sanitized_text ?? originalText;
+    renderTextPreview(originalText, sanitizedText);
+    renderSelectableTextEntities();
+    setBackendStatus("ok");
+  } catch (error) {
+    showError(error.message);
+    setBackendStatus("error");
+  } finally {
+    applyMitigationBtn.disabled = detectedEntities.length === 0;
+    applyMitigationBtn.classList.remove("loading");
+    applyMitigationBtn.textContent = "Apply Mitigation";
+  }
+}
+
+function setAllEntityTypesSelected(selected) {
+  const types = new Set(detectedEntities.map((entity) => String(entity.label).toUpperCase()));
+  selectedEntityTypes = selected ? types : new Set();
+  renderSelectableTextEntities();
+}
+
+function renderSelectableTextEntities() {
+  entitiesList.innerHTML = "";
+  const types = [...new Set(detectedEntities.map((entity) => String(entity.label).toUpperCase()))];
+  if (types.length === 0) {
+    noEntities.classList.remove("hidden");
+    entitySelectionControls.classList.add("hidden");
+    return;
+  }
+
+  noEntities.classList.add("hidden");
+  entitySelectionControls.classList.remove("hidden");
+  types.forEach((type) => {
+    const item = document.createElement("li");
+    item.className = "entity-choice-item";
+    const label = document.createElement("label");
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = selectedEntityTypes.has(type);
+    checkbox.dataset.entityType = type;
+    checkbox.addEventListener("change", () => {
+      if (checkbox.checked) selectedEntityTypes.add(type);
+      else selectedEntityTypes.delete(type);
+    });
+    const name = document.createElement("span");
+    name.textContent = displayEntityType(type);
+    label.className = "entity-option";
+    label.append(checkbox, name);
+    item.appendChild(label);
+    entitiesList.appendChild(item);
+  });
+}
+
+function displayEntityType(type) {
+  if (type.includes("PHONE")) return "PHONE NUMBERS";
+  return type.replaceAll("_", " ");
+}
+
+async function requestTextScan(text, options = {}) {
   const response = await fetchWithTimeout(
     TEXT_SCAN_ENDPOINT,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({ text, ...options }),
     },
     TEXT_TIMEOUT_MS
   );
@@ -311,7 +410,7 @@ async function sanitizeText(text) {
     throw new Error(`Sanitization failed (${response.status}): ${detail}`);
   }
 
-  if (!payload.sanitized_text && payload.sanitized_text !== "") {
+  if (typeof payload.sanitized_text !== "string") {
     if (payload.mitigated_output) {
       throw new Error(
         "Backend did not return sanitized_text. Restart the LeakWatch API server."
@@ -323,10 +422,9 @@ async function sanitizeText(text) {
   return payload;
 }
 
-function renderTextPreview(original, sanitized, entities) {
+function renderTextPreview(original, sanitized) {
   originalPreview.textContent = original;
   sanitizedPreview.textContent = sanitized;
-  renderEntityList(entitiesList, noEntities, entities);
   previewPanel.classList.remove("hidden");
   copyBtn.disabled = false;
   sendBtn.disabled = false;
@@ -627,6 +725,13 @@ function initAudioTab() {
   if (audioRecordBtn) {
     audioRecordBtn.addEventListener("click", handleToggleAudioRecording);
   }
+  window.addEventListener("pagehide", () => {
+    if (mediaRecorder && mediaRecorder.state !== "inactive") {
+      mediaRecorder.stop();
+    }
+    releaseAudioRecordStream();
+    resetAudioRecordButton();
+  }, { once: true });
 }
 
 function revokeAudioUrls() {
@@ -675,15 +780,33 @@ async function handleToggleAudioRecording() {
   if (isRecordingAudio) {
     stopAudioRecording();
   } else {
-    await startAudioRecording();
+    openMicrophonePermissionPage();
   }
 }
 
+function openMicrophonePermissionPage() {
+  chrome.tabs.create({ url: chrome.runtime.getURL("permission.html") }, (tab) => {
+    if (chrome.runtime.lastError || !tab) {
+      showError("Could not open the microphone permission page. Please try again.");
+    }
+  });
+}
+
 async function startAudioRecording() {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    showError("Microphone recording is not supported in this browser.");
+    return;
+  }
+  if (typeof MediaRecorder === "undefined") {
+    showError("MediaRecorder is not supported in this browser. You can still upload an audio file.");
+    return;
+  }
+
   try {
     audioRecordStream = await navigator.mediaDevices.getUserMedia({ audio: true });
   } catch (err) {
-    showError("Microphone access denied or unavailable: " + (err.message || err.name));
+    releaseAudioRecordStream();
+    showError(getAudioRecordingErrorMessage(err));
     return;
   }
 
@@ -706,16 +829,17 @@ async function startAudioRecording() {
   audioSanitizeBtn.disabled = true;
 
   audioRecordChunks = [];
-  const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-    ? "audio/webm;codecs=opus"
-    : (MediaRecorder.isTypeSupported("audio/ogg;codecs=opus") ? "audio/ogg;codecs=opus" : "");
-
-  const options = mimeType ? { mimeType } : {};
-
   try {
-    mediaRecorder = new MediaRecorder(audioRecordStream, options);
-  } catch (e) {
-    mediaRecorder = new MediaRecorder(audioRecordStream);
+    const preferredMimeType = ["audio/webm;codecs=opus", "audio/ogg;codecs=opus"]
+      .find((type) => MediaRecorder.isTypeSupported(type));
+    mediaRecorder = new MediaRecorder(
+      audioRecordStream,
+      preferredMimeType ? { mimeType: preferredMimeType } : undefined
+    );
+  } catch (err) {
+    releaseAudioRecordStream();
+    showError("Could not start audio recording. You can still upload an audio file.");
+    return;
   }
 
   mediaRecorder.ondataavailable = (e) => {
@@ -725,17 +849,14 @@ async function startAudioRecording() {
   };
 
   mediaRecorder.onstop = () => {
-    if (audioRecordStream) {
-      audioRecordStream.getTracks().forEach((track) => track.stop());
-      audioRecordStream = null;
-    }
+    releaseAudioRecordStream();
 
     if (audioRecordTimerInterval) {
       clearInterval(audioRecordTimerInterval);
       audioRecordTimerInterval = null;
     }
 
-    const recordedMime = mediaRecorder.mimeType || "audio/webm";
+    const recordedMime = mediaRecorder.mimeType || audioRecordChunks[0]?.type || "audio/webm";
     const extension = recordedMime.includes("ogg") ? "ogg" : "webm";
     const audioBlob = new Blob(audioRecordChunks, { type: recordedMime });
 
@@ -765,7 +886,14 @@ async function startAudioRecording() {
     resetAudioRecordButton();
   };
 
-  mediaRecorder.start(250);
+  try {
+    mediaRecorder.start(250);
+  } catch (err) {
+    mediaRecorder = null;
+    releaseAudioRecordStream();
+    showError("Could not start audio recording. You can still upload an audio file.");
+    return;
+  }
   isRecordingAudio = true;
   if (audioRecordBtn) {
     audioRecordBtn.classList.add("recording");
@@ -795,8 +923,34 @@ async function startAudioRecording() {
 function stopAudioRecording() {
   if (mediaRecorder && mediaRecorder.state !== "inactive") {
     mediaRecorder.stop();
+  } else {
+    releaseAudioRecordStream();
+    resetAudioRecordButton();
   }
   isRecordingAudio = false;
+}
+
+function releaseAudioRecordStream() {
+  if (audioRecordStream) {
+    audioRecordStream.getTracks().forEach((track) => track.stop());
+    audioRecordStream = null;
+  }
+}
+
+function getAudioRecordingErrorMessage(error) {
+  switch (error?.name) {
+    case "NotAllowedError":
+    case "PermissionDeniedError":
+      return "Microphone permission denied. Allow Privacy Sandbox in Chrome's microphone settings (chrome://settings/content/microphone), then click Record Voice again.";
+    case "NotFoundError":
+      return "No microphone was found. Connect a microphone or upload an audio file.";
+    case "NotReadableError":
+      return "The microphone is unavailable or being used by another app. You can still upload an audio file.";
+    case "SecurityError":
+      return "Microphone access is blocked by browser security settings. Allow microphone access or upload an audio file.";
+    default:
+      return `Could not access the microphone${error?.name ? ` (${error.name})` : ""}. You can still upload an audio file.`;
+  }
 }
 
 function resetAudioRecordButton() {

@@ -4,10 +4,8 @@
   "version": "1.1.0",
   "description": "Sanitize text and images locally via LeakWatch before sharing with LLMs or downloads.",
   "permissions": [
-    "activeTab",
-    "scripting",
     "clipboardWrite",
-    "audioCapture"
+    "sidePanel"
   ],
   "host_permissions": [
     "http://localhost:8000/*",
@@ -18,13 +16,15 @@
     "https://claude.ai/*"
   ],
   "action": {
-    "default_popup": "popup.html",
     "default_title": "Privacy Sandbox",
     "default_icon": {
       "16": "icons/icon16.png",
       "48": "icons/icon48.png",
       "128": "icons/icon128.png"
     }
+  },
+  "side_panel": {
+    "default_path": "popup.html"
   },
   "background": {
     "service_worker": "background.js"

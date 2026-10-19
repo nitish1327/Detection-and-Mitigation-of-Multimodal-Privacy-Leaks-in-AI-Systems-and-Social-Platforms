@@ -18,7 +18,13 @@ class TextMitigator:
         self.faker = Faker(config.faker_locale) if Faker else None
         self._faker_cache: Dict[str, str] = {}
 
-    def mitigate(self, text: str, entities: list[DetectedEntity]) -> Tuple[str, List[DetectedEntity]]:
+    def mitigate(
+        self,
+        text: str,
+        entities: list[DetectedEntity],
+        *,
+        force_synthetic: bool = False,
+    ) -> Tuple[str, List[DetectedEntity]]:
         if not text or not entities:
             return text, entities
 
@@ -42,7 +48,7 @@ class TextMitigator:
             current_end = orig_end + total_shift
             
             original_snippet = text[orig_start:orig_end]
-            replacement = self._replacement_for(entity)
+            replacement = self._replacement_for(entity, force_synthetic=force_synthetic)
             
             # Update the evolving sanitized string
             sanitized = sanitized[:current_start] + replacement + sanitized[current_end:]
@@ -69,15 +75,15 @@ class TextMitigator:
             return entity.mitigation
         return "mask" if self.config.mask_style not in {"synthetic", "faker"} else "replace"
 
-    def _replacement_for(self, entity: DetectedEntity) -> str:
+    def _replacement_for(self, entity: DetectedEntity, *, force_synthetic: bool = False) -> str:
         # Check static replacements first
-        if entity.text and entity.text in self.config.static_replacements:
+        if not force_synthetic and entity.text and entity.text in self.config.static_replacements:
             return self.config.static_replacements[entity.text]
 
         style = self.config.mask_style
         label = entity.label.upper()
 
-        if style in {"faker", "synthetic"} and entity.text:
+        if (force_synthetic or style in {"faker", "synthetic"}) and entity.text:
             if entity.text not in self._faker_cache:
                 self._faker_cache[entity.text] = self._generate_faker_value(entity)
             return self._faker_cache[entity.text]

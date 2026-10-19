@@ -224,6 +224,60 @@ textarea:focus {
   color: var(--warning);
 }
 
+.entities-list .entity-choice-item {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+}
+
+.entity-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.entity-option:has(input:checked) {
+  border-color: var(--accent);
+  background: rgba(59, 130, 246, 0.14);
+}
+
+.entity-option input {
+  accent-color: var(--accent);
+  margin: 0;
+}
+
+.entity-selection-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.entity-selection-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.entity-selection-actions .btn {
+  flex: 1;
+  margin-top: 0;
+  padding: 7px 10px;
+  font-size: 11px;
+}
+
+#apply-mitigation-btn {
+  margin-top: 0;
+}
+
 .muted {
   color: var(--muted);
   font-size: 12px;

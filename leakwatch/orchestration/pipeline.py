@@ -42,6 +42,7 @@ class PipelineManager:
             transcription_backend=self.config.audio.transcription_backend,
             whisper_model=self.config.audio.whisper_model,
             app_mode=self.config.app.mode,
+            ffmpeg_binary=self.config.audio.ffmpeg_binary,
         )
         self.audio_mitigator = AudioMitigator(self.config.audio)
         self.video_adapter = VideoAdapter(
@@ -59,6 +60,28 @@ class PipelineManager:
             raw_text,
             suffix=".sanitized.txt",
             modality=Modality.TEXT,
+        )
+
+    def detect_text_entities(self, text: str) -> list[DetectedEntity]:
+        """Detect text entities and attach stable span-based IDs for API/UI use."""
+        return self._stamp_entity_ids(self.text_detector.detect(text))
+
+    def mitigate_text_entities(
+        self,
+        text: str,
+        entities: list[DetectedEntity],
+        selected_entity_types: set[str],
+    ) -> tuple[str, list[DetectedEntity]]:
+        """Mitigate only the selected entity types from the unchanged source text."""
+        selected_entities = [
+            entity for entity in entities if entity.label.upper() in selected_entity_types
+        ]
+        if not selected_entities:
+            return text, []
+        return self.text_mitigator.mitigate(
+            text,
+            selected_entities,
+            force_synthetic=True,
         )
 
     # --- Audio Modality ----------------------------------------------

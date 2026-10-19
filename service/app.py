@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field, HttpUrl, model_validator
 
 from leakwatch.orchestration import PipelineManager, VideoProcessingError
 from leakwatch.utils.config import get_config
-from leakwatch.utils.types import DetectionResult
+from leakwatch.utils.types import DetectionResult, Modality
 from leakwatch.video.tracker import (
     generate_video_face_preview,
     process_selective_video,
@@ -76,6 +76,11 @@ class TextScanRequest(BaseModel):
     text: str | None = Field(default=None, description="Raw text content to scan.")
     path: str | None = Field(default=None, description="Filesystem path to a text document.")
     url: HttpUrl | None = Field(default=None, description="Optional URL pointing to a text file.")
+    detect_only: bool = Field(default=False, description="Return detections without applying mitigation.")
+    selected_entity_types: list[str] | None = Field(
+        default=None,
+        description="Entity labels to mitigate. Omit for the legacy behavior of mitigating all detected entities.",
+    )
     policy: PolicyConfig = Field(default_factory=PolicyConfig)
 
     @model_validator(mode="after")
@@ -134,6 +139,34 @@ def scan_text(request: TextScanRequest) -> ScanResponse:
             source_path.write_text(request.text, encoding="utf-8")
         else:
             source_path, scratch_dir = _materialize_file(request.path, request.url, suffix=".txt")
+
+        if request.detect_only or request.selected_entity_types is not None:
+            original_text = source_path.read_text(encoding="utf-8")
+            detected = PIPELINE.detect_text_entities(original_text)
+            detection_result = DetectionResult(
+                source_path=source_path,
+                modality=Modality.TEXT,
+                entities=detected,
+            )
+            response = _build_response(detection_result, request.policy)
+
+            if request.detect_only:
+                response.sanitized_text = original_text
+                response.redacted_entities = sorted({entity.label.upper() for entity in detected})
+                return response
+
+            selected_types = {label.strip().upper() for label in request.selected_entity_types or []}
+            sanitized_text, mitigated_entities = PIPELINE.mitigate_text_entities(
+                original_text,
+                detected,
+                selected_types,
+            )
+            response.sanitized_text = sanitized_text
+            response.entities = [entity.model_dump() for entity in mitigated_entities]
+            response.redacted_entities = sorted({entity.label.upper() for entity in mitigated_entities})
+            return response
+
+        # Requests without the new optional fields retain the original automatic pipeline.
         result = PIPELINE.process_text(source_path)
         response = _build_response(result, request.policy)
         if result.mitigated_output and result.mitigated_output.exists():

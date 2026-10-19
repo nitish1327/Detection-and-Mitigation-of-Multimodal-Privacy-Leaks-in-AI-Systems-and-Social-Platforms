@@ -104,7 +104,7 @@ def test_extension_structure() -> None:
 
     manifest = json.loads((EXTENSION_DIR / "manifest.json").read_text(encoding="utf-8"))
     record("manifest_version is 3", manifest.get("manifest_version") == 3)
-    record("popup registered", manifest.get("action", {}).get("default_popup") == "popup.html")
+    record("side panel registered", manifest.get("side_panel", {}).get("default_path") == "popup.html")
     record("content scripts defined", len(manifest.get("content_scripts", [])) >= 3)
     record(
         "localhost host_permissions",
@@ -123,7 +123,20 @@ def test_ui_tabs() -> None:
     record("Video face selector wired", "renderFaceGrid" in js and "video-face-grid" in html)
     record("Video selective controls", "handleSelectiveSanitize" in js and "video-apply-selective-btn" in html)
     record("Download button wired", "handleDownloadImage" in js and "download-btn" in html)
-    record("Text sanitization preserved", "sanitizeText" in js and "handleSendToLlm" in js)
+    record("Text sanitization flow wired", "requestTextScan" in js and "handleSendToLlm" in js)
+    record(
+        "Text entity selection controls",
+        all(control in html for control in (
+            'id="entity-selection-controls"',
+            'id="select-all-entities-btn"',
+            'id="clear-all-entities-btn"',
+            'id="apply-mitigation-btn"',
+        )),
+    )
+    record(
+        "Text scan resets selection state",
+        "detectedEntities = [];" in js and "selectedEntityTypes = new Set();" in js,
+    )
 
 
 def test_backend_health() -> None:

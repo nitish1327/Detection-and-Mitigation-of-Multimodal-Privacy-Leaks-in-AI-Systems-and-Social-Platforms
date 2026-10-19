@@ -26,6 +26,16 @@ leakwatch/utils/__init__.py
 leakwatch/utils/config.py
 leakwatch/utils/logging.py
 leakwatch/utils/types.py
+leakwatch/video/__init__.py
+leakwatch/video/tracker.py
+tests/test_allowlist.py
 tests/test_audio_pipeline.py
+tests/test_detection_extended.py
+tests/test_folder_routing.py
+tests/test_image_mitigation.py
+tests/test_image_pipeline.py
+tests/test_mitigation_expanded.py
+tests/test_service_video.py
+tests/test_synthetic_data.py
 tests/test_text_pipeline.py
 tests/test_video_pipeline.py
