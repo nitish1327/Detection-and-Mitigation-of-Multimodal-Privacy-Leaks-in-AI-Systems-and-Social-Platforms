@@ -224,13 +224,17 @@ class ImageMitigator:
             if entity.label in {"qr_code", "aadhar", "mrz_zone"} and style not in {"synthetic", "replace"}:
                 style = "aggressive_blur"
 
+            if entity.label == "face" and (entity.mitigation in {"synthetic", "replace"} or self.config.default_style in {"synthetic", "replace"}):
+                if style in {"blur", "synthetic"}:
+                    style = "replace"
+
             mitigated_text = entity.text
             mapped_style = "synthetic" if style == "replace" else style
 
             if mapped_style == "synthetic":
                 if entity.label == "face":
                     # Skip face replacement for tiny faces (watermarks, ghost images)
-                    if w < 60 or h < 60:
+                    if w < 40 or h < 40:
                         image[y : y + h, x : x + w] = cv2.GaussianBlur(roi_original, (31, 31), 10)
                         mitigated_text = "[BLURRED_SMALL_FACE]"
                     else:

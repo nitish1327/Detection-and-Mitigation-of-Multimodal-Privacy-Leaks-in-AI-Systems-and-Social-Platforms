@@ -48,6 +48,8 @@ const SUPPORTED_VIDEO_TYPES = new Set([
 // Shared UI
 const errorPanel = document.getElementById("error-panel");
 const backendStatus = document.getElementById("backend-status");
+const maximizeBtn = document.getElementById("maximize-btn");
+
 
 // Text tab
 const inputText = document.getElementById("input-text");
@@ -73,6 +75,8 @@ const sanitizedImageEl = document.getElementById("sanitized-image");
 const imageEntitiesList = document.getElementById("image-entities-list");
 const imageNoEntities = document.getElementById("image-no-entities");
 const downloadBtn = document.getElementById("download-btn");
+const imageExpandBtn = document.getElementById("image-expand-btn");
+
 
 // Audio tab
 const audioInput = document.getElementById("audio-input");
@@ -106,6 +110,8 @@ const sanitizedVideoEl = document.getElementById("sanitized-video");
 const videoEntitiesList = document.getElementById("video-entities-list");
 const videoNoEntities = document.getElementById("video-no-entities");
 const videoDownloadBtn = document.getElementById("video-download-btn");
+const videoExpandBtn = document.getElementById("video-expand-btn");
+
 const videoMitigateAudioToggle = document.getElementById("video-mitigate-audio-toggle");
 const videoAudioHint = document.getElementById("video-audio-hint");
 const videoAudioMitigatedBadge = document.getElementById("video-audio-mitigated-badge");
@@ -144,6 +150,7 @@ let detectedVideoFaces = [];
 let selectedFaceIds = new Set();
 
 document.addEventListener("DOMContentLoaded", () => {
+  initMaximizeUi();
   checkBackendHealth();
   initTabs();
   initTextTab();
@@ -169,8 +176,101 @@ window.addEventListener("unload", () => {
 });
 
 // =============================================================================
-// Shared helpers
+// Shared helpers & Maximize / Tab Mode
 // =============================================================================
+
+function getActiveTabName() {
+  const activeBtn = document.querySelector(".tab.active");
+  return activeBtn?.dataset?.tab || "text";
+}
+
+function updateMaximizeUi() {
+  const urlParams = new URLSearchParams(window.location.search);
+  const isExplicitTabMode = urlParams.get("mode") === "tab";
+  const isWide = window.innerWidth >= 620;
+  const isFullscreen = Boolean(document.fullscreenElement);
+
+  if (isExplicitTabMode || isWide) {
+    document.body.classList.add("tab-mode");
+    document.body.classList.add("maximized-mode");
+  } else {
+    document.body.classList.remove("tab-mode");
+    document.body.classList.remove("maximized-mode");
+  }
+
+  if (!maximizeBtn) return;
+
+  if (isExplicitTabMode || isWide) {
+    maximizeBtn.title = isFullscreen ? "Exit Fullscreen (Esc)" : "Toggle Fullscreen";
+    maximizeBtn.setAttribute("aria-label", maximizeBtn.title);
+    maximizeBtn.innerHTML = `
+      <svg id="maximize-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="4 14 10 14 10 20"></polyline>
+        <polyline points="20 10 14 10 14 4"></polyline>
+        <line x1="14" y1="10" x2="21" y2="3"></line>
+        <line x1="3" y1="21" x2="10" y2="14"></line>
+      </svg>
+    `;
+  } else {
+    maximizeBtn.title = "Maximize (Open in Full Tab)";
+    maximizeBtn.setAttribute("aria-label", maximizeBtn.title);
+    maximizeBtn.innerHTML = `
+      <svg id="maximize-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="15 3 21 3 21 9"></polyline>
+        <polyline points="9 21 3 21 3 15"></polyline>
+        <line x1="21" y1="3" x2="14" y2="10"></line>
+        <line x1="3" y1="21" x2="10" y2="14"></line>
+      </svg>
+    `;
+  }
+}
+
+function handleMaximize() {
+  const urlParams = new URLSearchParams(window.location.search);
+  const isExplicitTabMode = urlParams.get("mode") === "tab";
+  const isWide = window.innerWidth >= 620;
+
+  if (!isExplicitTabMode && !isWide) {
+    // Open full browser tab
+    const activeTab = getActiveTabName();
+    const targetUrl = chrome?.runtime?.getURL
+      ? chrome.runtime.getURL(`popup.html?mode=tab&tab=${encodeURIComponent(activeTab)}`)
+      : `popup.html?mode=tab&tab=${encodeURIComponent(activeTab)}`;
+    if (chrome?.tabs?.create) {
+      chrome.tabs.create({ url: targetUrl });
+    } else {
+      window.open(targetUrl, "_blank");
+    }
+  } else {
+    // Already in a wide window or browser tab -> toggle fullscreen
+    if (!document.fullscreenElement) {
+      if (document.documentElement.requestFullscreen) {
+        document.documentElement.requestFullscreen().catch(() => {});
+      }
+    } else {
+      if (document.exitFullscreen) {
+        document.exitFullscreen().catch(() => {});
+      }
+    }
+  }
+}
+
+function initMaximizeUi() {
+  const urlParams = new URLSearchParams(window.location.search);
+  const requestedTab = urlParams.get("tab");
+  if (requestedTab && ["text", "image", "audio", "video"].includes(requestedTab)) {
+    switchTab(requestedTab);
+  }
+
+  updateMaximizeUi();
+
+  if (maximizeBtn) {
+    maximizeBtn.addEventListener("click", handleMaximize);
+  }
+  window.addEventListener("resize", updateMaximizeUi);
+  document.addEventListener("fullscreenchange", updateMaximizeUi);
+}
+
 
 function initTabs() {
   tabButtons.forEach((button) => {
@@ -525,6 +625,16 @@ function initImageTab() {
   imageInput.addEventListener("change", handleImageSelected);
   imageSanitizeBtn.addEventListener("click", handleImageSanitize);
   downloadBtn.addEventListener("click", handleDownloadImage);
+  if (imageExpandBtn) {
+    imageExpandBtn.addEventListener("click", handleImageExpand);
+  }
+}
+
+function handleImageExpand() {
+  const target = sanitizedImageUrl || originalImageUrl;
+  if (target) {
+    window.open(target, "_blank");
+  }
 }
 
 function revokeImageUrls() {
@@ -1045,9 +1155,15 @@ function handleDownloadAudio() {
 // =============================================================================
 
 function initVideoTab() {
+  if (sanitizedVideoEl) {
+    sanitizedVideoEl.setAttribute("controlsList", "nofullscreen");
+  }
   videoInput.addEventListener("change", handleVideoSelected);
   videoSanitizeBtn.addEventListener("click", handleVideoSanitize);
   videoDownloadBtn.addEventListener("click", handleDownloadVideo);
+  if (videoExpandBtn) {
+    videoExpandBtn.addEventListener("click", handleVideoExpand);
+  }
   if (videoApplySelectiveBtn) {
     videoApplySelectiveBtn.addEventListener("click", handleSelectiveSanitize);
   }
@@ -1055,6 +1171,12 @@ function initVideoTab() {
     videoBlurStrengthSlider.addEventListener("input", () => {
       videoBlurStrengthVal.textContent = videoBlurStrengthSlider.value;
     });
+  }
+}
+
+function handleVideoExpand() {
+  if (sanitizedVideoUrl) {
+    window.open(sanitizedVideoUrl, "_blank");
   }
 }
 

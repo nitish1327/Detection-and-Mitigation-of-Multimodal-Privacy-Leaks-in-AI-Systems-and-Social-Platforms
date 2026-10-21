@@ -5,7 +5,8 @@
   "description": "Sanitize text and images locally via LeakWatch before sharing with LLMs or downloads.",
   "permissions": [
     "clipboardWrite",
-    "sidePanel"
+    "sidePanel",
+    "tabs"
   ],
   "host_permissions": [
     "http://localhost:8000/*",

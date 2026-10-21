@@ -128,6 +128,20 @@ class TextDetector:
         entities.extend(self._spacy_entities(text))
         entities.extend(self._regex_entities(text))
 
+        spoken_emails = self._detect_spoken_emails(text)
+        if spoken_emails:
+            retained_entities: list[DetectedEntity] = []
+            for ent in entities:
+                if ent.span:
+                    is_subsumed = any(
+                        se.span and se.span.start <= ent.span.start and ent.span.end <= se.span.end
+                        for se in spoken_emails
+                    )
+                    if is_subsumed:
+                        continue
+                retained_entities.append(ent)
+            entities = retained_entities + spoken_emails
+
         # Filter out entities that are part of an allowlisted term (case-insensitive)
         allowlist_lower = [term.lower() for term in self.config.allowlist]
         filtered_entities = [
@@ -211,3 +225,107 @@ class TextDetector:
                     )
                 )
         return results
+
+    def _detect_spoken_emails(self, text: str) -> list[DetectedEntity]:
+        """Detect spoken, phonetically transcribed, or conversational email addresses."""
+        if not text:
+            return []
+
+        common_prepositions = {
+            "out", "at", "to", "for", "in", "on", "by", "with", "from",
+            "reach", "call", "contact", "write", "send", "me", "us", "him", "her", "them", "is", "and", "or",
+        }
+
+        raw_matches: list[tuple[int, int, str]] = []
+
+        # 1. Contextual email intro phrase: "email id is ...", "email is ...", "mail id is ...", "email: ..."
+        # Matches: "my email ID is me on uradyadheradegmail.com", "email is user@domain.com", etc.
+        p_intro = re.compile(
+            r'\b(?:my\s+)?(?:email|e-mail|mail)\s*(?:id|address)?\s*(?:is|:|-)\s+'
+            r'([a-zA-Z0-9._%+-]+(?:\s+[a-zA-Z0-9._%+-]+)*?'
+            r'(?:@[a-zA-Z0-9.-]+|\.[a-zA-Z]{2,}|adherade|attherate|at\s*the\s*rate|\bat\b\s+[a-zA-Z0-9.-]+|gmail|yahoo|outlook|hotmail)'
+            r'[^\s,.]*(?:\.[a-zA-Z]{2,})?)',
+            re.IGNORECASE,
+        )
+        for m in p_intro.finditer(text):
+            val = m.group(1).strip()
+            if val:
+                raw_matches.append((m.start(1), m.end(1), val))
+
+        # 2. Spoken 'at the rate' or phonetic 'adherade' / 'attherate'
+        # e.g., "john at the rate gmail dot com", "alice adherade yahoo.com"
+        p_spoken_rate = re.compile(
+            r'\b([a-zA-Z0-9._%+-]+)\s+(?:at\s+the\s+rate|at\s+rate|adherade|attherate)\s+'
+            r'([a-zA-Z0-9.-]+(?:\s*(?:\.|\s+dot\s+)\s*)[a-zA-Z]{2,})\b',
+            re.IGNORECASE,
+        )
+        for m in p_spoken_rate.finditer(text):
+            if m.group(1).lower() not in common_prepositions:
+                raw_matches.append((m.start(0), m.end(0), m.group(0)))
+
+        # 3. Spoken 'at' with a known mail provider or domain
+        # e.g., "john.doe at gmail dot com", "alice at yahoo.com"
+        p_spoken_at = re.compile(
+            r'\b([a-zA-Z0-9._%+-]+)\s+at\s+'
+            r'((?:gmail|yahoo|outlook|hotmail|icloud|protonmail|rediffmail)(?:\s*(?:\.|\s*dot\s*)\s*[a-zA-Z]{2,})?)\b',
+            re.IGNORECASE,
+        )
+        for m in p_spoken_at.finditer(text):
+            if m.group(1).lower() not in common_prepositions:
+                raw_matches.append((m.start(0), m.end(0), m.group(0)))
+
+        # 4. Phonetic / domain-concatenated token ending in domain
+        # e.g., "uradyadheradegmail.com", "testadheradeyahoo.com", "userattherategmail.com"
+        p_phonetic_tok = re.compile(
+            r'\b[a-zA-Z0-9._%+-]*(?:adherade|attherate)[a-zA-Z0-9._%+-]*'
+            r'(?:gmail|yahoo|outlook|hotmail|icloud|protonmail|rediffmail|[a-zA-Z0-9-]+)\.[a-zA-Z]{2,}\b',
+            re.IGNORECASE,
+        )
+        for m in p_phonetic_tok.finditer(text):
+            raw_matches.append((m.start(0), m.end(0), m.group(0)))
+
+        # 5. Token ending in email provider and TLD without @ (Whisper transcription artifact)
+        # e.g. "uradygmail.com"
+        p_provider_tok = re.compile(
+            r'\b[a-zA-Z0-9._%+-]+(?:gmail|yahoo|outlook|hotmail|icloud|protonmail|rediffmail)\.(?:com|org|net|in|co|edu)\b',
+            re.IGNORECASE,
+        )
+        for m in p_provider_tok.finditer(text):
+            raw_matches.append((m.start(0), m.end(0), m.group(0)))
+
+        if not raw_matches:
+            return []
+
+        # Merge overlapping matches preferring the encompassing (longest) span
+        raw_matches.sort(key=lambda s: (s[0], -(s[1] - s[0])))
+        merged: list[tuple[int, int, str]] = []
+        for start, end, val in raw_matches:
+            if not merged:
+                merged.append((start, end, val))
+                continue
+            prev_start, prev_end, prev_val = merged[-1]
+            if start >= prev_start and end <= prev_end:
+                # Fully contained in previous longer match; skip
+                continue
+            if start < prev_end:
+                # Partially overlapping: take outer envelope
+                new_end = max(prev_end, end)
+                merged[-1] = (prev_start, new_end, text[prev_start:new_end])
+            else:
+                merged.append((start, end, val))
+
+        entities: list[DetectedEntity] = []
+        for start, end, val in merged:
+            entities.append(
+                DetectedEntity(
+                    modality=Modality.TEXT,
+                    label="email",
+                    confidence=0.95,
+                    text=val,
+                    span=Span(start=start, end=end),
+                    mitigation="mask",
+                    detection_method="regex",
+                )
+            )
+        return entities
+

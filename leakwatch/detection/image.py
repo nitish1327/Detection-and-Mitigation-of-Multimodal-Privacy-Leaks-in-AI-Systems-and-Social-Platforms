@@ -557,12 +557,13 @@ class ImageDetector:
                 if any(self._bbox_overlap(bbox, seen) for seen in seen_faces_global):
                     continue
                 seen_faces_global.append(bbox)
+                face_mitigation = "replace" if self.config.default_style in {"synthetic", "replace"} else ("blur" if self.config.default_style == "blur" else "none")
                 yield DetectedEntity(
                     modality=Modality.IMAGE,
                     label="face",
                     confidence=score,
                     bbox=bbox,
-                    mitigation="blur",
+                    mitigation=face_mitigation,
                     detection_method="heuristic",
                 )
 

@@ -93,3 +93,30 @@ def test_aggressive_blur_forced(sample_image):
     _, updated = mitigator.mitigate(sample_image, [entity], output_path)
     
     assert updated[0].mitigation == "aggressive_blur"
+
+
+def test_face_tweaking_perturbation(tmp_path):
+    path = tmp_path / "face_test.png"
+    img = np.zeros((200, 200, 3), dtype=np.uint8)
+    cv2.circle(img, (100, 100), 40, (200, 180, 150), -1)
+    cv2.circle(img, (85, 90), 5, (50, 50, 50), -1)
+    cv2.circle(img, (115, 90), 5, (50, 50, 50), -1)
+    cv2.imwrite(str(path), img)
+
+    config = ImageConfig(default_style="synthetic")
+    mitigator = ImageMitigator(config)
+
+    entity = DetectedEntity(
+        modality=Modality.IMAGE,
+        label="face",
+        confidence=0.95,
+        bbox=BoundingBox(x=60, y=60, width=80, height=80),
+    )
+
+    output_path = tmp_path / "face_perturbed.png"
+    out, updated = mitigator.mitigate(path, [entity], output_path)
+
+    assert updated[0].text == "[PERTURBED_FACE]"
+    assert updated[0].mitigation == "replace"
+    assert output_path.exists()
+

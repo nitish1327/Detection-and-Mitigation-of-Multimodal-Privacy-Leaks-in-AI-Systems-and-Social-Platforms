@@ -20,15 +20,23 @@
   padding: 0;
 }
 
+html {
+  background: var(--bg);
+  min-height: 100%;
+}
+
 body {
-  width: 440px;
-  min-height: 320px;
-  max-height: 680px;
+  width: 100%;
+  min-width: 320px;
+  max-width: 100%;
+  min-height: 100vh;
+  margin: 0 auto;
   overflow-y: auto;
   font-family: var(--font);
   font-size: 13px;
   color: var(--text);
   background: var(--bg);
+  box-sizing: border-box;
 }
 
 .header {
@@ -55,8 +63,59 @@ body {
   color: var(--muted);
 }
 
-.status-badge {
+.header-actions {
   margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.header-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 6px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.header-icon-btn:hover {
+  background: rgba(59, 130, 246, 0.15);
+  border-color: var(--accent);
+  color: #fff;
+  transform: scale(1.06);
+}
+
+.header-icon-btn:active {
+  transform: scale(0.96);
+}
+
+.panel-expand-btn {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent);
+  background: rgba(59, 130, 246, 0.08);
+  border: 1px solid rgba(59, 130, 246, 0.25);
+  border-radius: 4px;
+  padding: 2px 8px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.panel-expand-btn:hover {
+  background: rgba(59, 130, 246, 0.2);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.status-badge {
   font-size: 18px;
   line-height: 1;
 }
@@ -425,6 +484,11 @@ input[type="file"]::file-selector-button {
   width: 100%;
   max-height: 200px;
   border-radius: 4px;
+}
+
+/* Hide native HTML5 video fullscreen square button beside 3 dots */
+video::-webkit-media-controls-fullscreen-button {
+  display: none !important;
 }
 
 /* ---- Multi-Step Face Blur UI ---- */
@@ -832,4 +896,173 @@ input[type="file"]::file-selector-button {
   height: 36px;
   margin-top: 4px;
 }
+
+/* =============================================================================
+   Maximized / Full-Tab Responsive Styles
+   ============================================================================= */
+body.tab-mode,
+body.maximized-mode {
+  max-width: 1100px;
+  min-height: 100vh;
+  max-height: none;
+  box-shadow: 0 0 35px rgba(0, 0, 0, 0.45);
+}
+
+body.tab-mode .header,
+body.maximized-mode .header {
+  padding: 16px 28px;
+}
+
+body.tab-mode .header h1,
+body.maximized-mode .header h1 {
+  font-size: 18px;
+}
+
+body.tab-mode .subtitle,
+body.maximized-mode .subtitle {
+  font-size: 12px;
+}
+
+body.tab-mode .tabs,
+body.maximized-mode .tabs {
+  padding: 0 28px;
+}
+
+body.tab-mode .panel,
+body.maximized-mode .panel {
+  padding: 22px 28px;
+}
+
+body.tab-mode .compare,
+body.maximized-mode .compare {
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+}
+
+body.tab-mode .preview-box,
+body.maximized-mode .preview-box {
+  max-height: 320px;
+  font-size: 13px;
+}
+
+body.tab-mode .image-compare,
+body.maximized-mode .image-compare {
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+}
+
+body.tab-mode .image-frame,
+body.maximized-mode .image-frame {
+  min-height: 260px;
+  max-height: 520px;
+}
+
+body.tab-mode .image-frame img,
+body.maximized-mode .image-frame img {
+  max-height: 500px;
+}
+
+body.tab-mode .media-preview-container,
+body.maximized-mode .media-preview-container {
+  padding: 14px;
+}
+
+body.tab-mode .media-player,
+body.maximized-mode .media-player {
+  max-height: 540px;
+}
+
+body.tab-mode .face-grid,
+body.maximized-mode .face-grid {
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  max-height: 440px;
+}
+
+body.tab-mode .face-thumb-wrapper,
+body.maximized-mode .face-thumb-wrapper {
+  height: 110px;
+}
+
+body.tab-mode textarea,
+body.maximized-mode textarea {
+  min-height: 140px;
+  font-size: 14px;
+}
+
+/* Also apply when viewport width expands above 620px (e.g. wide sidepanel or tab) */
+@media (min-width: 620px) {
+  body {
+    max-width: 1100px;
+    min-height: 100vh;
+    max-height: none;
+    box-shadow: 0 0 35px rgba(0, 0, 0, 0.45);
+  }
+
+  .header {
+    padding: 16px 28px;
+  }
+
+  .header h1 {
+    font-size: 18px;
+  }
+
+  .subtitle {
+    font-size: 12px;
+  }
+
+  .tabs {
+    padding: 0 28px;
+  }
+
+  .panel {
+    padding: 22px 28px;
+  }
+
+  .compare {
+    grid-template-columns: 1fr 1fr;
+    gap: 18px;
+  }
+
+  .preview-box {
+    max-height: 320px;
+    font-size: 13px;
+  }
+
+  .image-compare {
+    grid-template-columns: 1fr 1fr;
+    gap: 18px;
+  }
+
+  .image-frame {
+    min-height: 260px;
+    max-height: 520px;
+  }
+
+  .image-frame img {
+    max-height: 500px;
+  }
+
+  .media-preview-container {
+    padding: 14px;
+  }
+
+  .media-player {
+    max-height: 540px;
+  }
+
+  .face-grid {
+    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+    max-height: 440px;
+  }
+
+  .face-thumb-wrapper {
+    height: 110px;
+  }
+
+  textarea {
+    min-height: 140px;
+    font-size: 14px;
+  }
+}
+
 

@@ -43,7 +43,7 @@ class ImageConfig(BaseModel):
     enable_layout: bool = True
     enable_mrz: bool = True
     padding_percent: float = 0.05
-    default_style: str = "blur"  # options: blur, pixelate, redact, synthetic
+    default_style: str = "synthetic"  # options: blur, pixelate, redact, synthetic
     strip_metadata: bool = True
     only_mitigated_info: bool = False  # If True, blackout everything except mitigated regions
     mitigated_labels: list[str] | None = None

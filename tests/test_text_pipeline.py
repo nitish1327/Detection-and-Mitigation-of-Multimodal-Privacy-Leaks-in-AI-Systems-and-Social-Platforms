@@ -127,3 +127,30 @@ def test_text_wrapping_behavior(tmp_path):
     lines = sanitized_text.splitlines()
     assert len(lines) > 1
     assert all(len(line) <= 40 for line in lines)
+
+
+def test_spoken_and_phonetic_email_detection():
+    config = TextConfig(enable_spacy=False)
+    detector = text_detection_module.TextDetector(config)
+
+    # 1. Video2 transcript with phonetic Whisper transcription of email
+    transcript = (
+        "Hi I am Ghani Ananya and my other number is 9.0625347320 and my phone number is "
+        "7.67669.624 and my email ID is me on uradyadheradegmail.com"
+    )
+    entities = detector.detect(transcript)
+    email_entities = [e for e in entities if e.label == "email"]
+    assert len(email_entities) >= 1
+    assert "uradyadheradegmail.com" in email_entities[0].text
+
+    # 2. Standalone spoken 'at the rate'
+    t2 = "Send an email to user at the rate yahoo dot com please"
+    e2 = [e for e in detector.detect(t2) if e.label == "email"]
+    assert len(e2) == 1
+    assert e2[0].text == "user at the rate yahoo dot com"
+
+    # 3. Standalone spoken 'at' with mail provider
+    t3 = "Contact me at alice at gmail dot com for updates"
+    e3 = [e for e in detector.detect(t3) if e.label == "email"]
+    assert len(e3) == 1
+    assert e3[0].text == "alice at gmail dot com"

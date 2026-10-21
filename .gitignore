@@ -139,5 +139,8 @@ artifacts/audit.log
 artifacts/*.audit.json
 artifacts/*.sanitized.png
 artifacts/*.sanitized.overlay.png
+artifacts/*.mp4
+artifacts/*_frames/
 *.ogg
 *.wav
+
