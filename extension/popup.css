@@ -638,6 +638,47 @@ input[type="file"]::file-selector-button {
   font-size: 11px;
 }
 
+.toggle-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  cursor: pointer;
+  transition: border-color 0.15s, background-color 0.15s;
+}
+
+.toggle-card:hover {
+  border-color: var(--accent);
+}
+
+.toggle-card input[type="checkbox"] {
+  margin-top: 2px;
+  accent-color: var(--accent);
+  cursor: pointer;
+  width: 15px;
+  height: 15px;
+}
+
+.toggle-card-content {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 12px;
+}
+
+.toggle-card-content strong {
+  font-size: 12px;
+  color: var(--text);
+}
+
+.toggle-card-content .muted {
+  font-size: 11px;
+  line-height: 1.4;
+}
+
 .slider-header {
   display: flex;
   justify-content: space-between;

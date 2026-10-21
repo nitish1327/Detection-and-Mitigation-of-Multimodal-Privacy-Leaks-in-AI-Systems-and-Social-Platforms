@@ -640,12 +640,45 @@ def find_ffmpeg() -> str | None:
     return None
 
 
+def has_audio_stream(video_path: Path | str) -> bool:
+    """Check if the video container includes an audio stream."""
+    ffmpeg = find_ffmpeg()
+    if not ffmpeg:
+        return False
+    cmd = [ffmpeg, "-i", str(video_path)]
+    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    for line in proc.stderr.splitlines():
+        if "Stream #" in line and "Audio:" in line:
+            return True
+    return False
+
+
+def extract_audio(video_path: Path | str, output_wav: Path | str) -> bool:
+    """Extract 16kHz mono PCM WAV for Whisper transcription and audio mitigation."""
+    ffmpeg = find_ffmpeg()
+    if not ffmpeg:
+        return False
+    output_wav = Path(output_wav)
+    output_wav.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        ffmpeg, "-y",
+        "-i", str(video_path),
+        "-vn",
+        "-ac", "1",
+        "-ar", "16000",
+        str(output_wav),
+    ]
+    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    return proc.returncode == 0 and output_wav.exists() and output_wav.stat().st_size > 0
+
+
 def reconstruct_with_audio(
     raw_video: Path,
     source_video: Path,
     output_path: Path,
+    sanitized_audio_path: Path | None = None,
 ) -> Path:
-    """Transcode raw_video to H.264 and mux audio from source_video using ffmpeg."""
+    """Transcode raw_video to H.264 and mux audio (sanitized if provided, else source) using ffmpeg."""
     ffmpeg = find_ffmpeg()
     if not ffmpeg:
         LOGGER.warning("ffmpeg not found -- output will lack audio and use raw container.")
@@ -655,10 +688,15 @@ def reconstruct_with_audio(
         return output_path
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    audio_source = (
+        sanitized_audio_path
+        if (sanitized_audio_path and Path(sanitized_audio_path).exists())
+        else source_video
+    )
     cmd = [
         ffmpeg, "-y",
         "-i", str(raw_video),
-        "-i", str(source_video),
+        "-i", str(audio_source),
         "-map", "0:v:0",
         "-map", "1:a?",
         "-c:v", "libx264",
@@ -823,6 +861,7 @@ def generate_video_face_preview(video_path: Path | str) -> dict[str, Any]:
 
     return {
         "face_count": len(face_items),
+        "has_audio": has_audio_stream(path),
         "preview_image_base64": preview_b64,
         "annotated_frame_base64": preview_b64,
         "faces": face_items,
@@ -844,6 +883,8 @@ def process_selective_video(
     mode: str = "blur_selected",
     blur_strength: int = 51,
     redact_sensitive_info: bool = True,
+    mitigate_audio: bool = False,
+    pipeline_manager: Any = None,
     end_frame: int | None = None,
 ) -> dict[str, Any]:
     """Track and blur selected faces across all frames and replace sensitive text with Faker."""
@@ -1041,8 +1082,47 @@ def process_selective_video(
     writer.release()
     cap.release()
 
-    # Reconstruct with audio
-    reconstruct_with_audio(temp_video, video_path, output_path)
+    # Mitigate audio track if requested and present
+    sanitized_audio_path: Path | None = None
+    audio_entities: list[dict[str, Any]] = []
+    if mitigate_audio:
+        try:
+            if has_audio_stream(video_path):
+                LOGGER.info("Video contains audio stream. Running audio privacy mitigation...")
+                temp_audio_raw = temp_dir / "audio_extracted_raw.wav"
+                if extract_audio(video_path, temp_audio_raw):
+                    mgr = pipeline_manager
+                    if mgr is None:
+                        from ..orchestration.pipeline import PipelineManager
+                        from ..utils.config import get_config
+                        mgr = PipelineManager(get_config())
+                    audio_res = mgr.process_audio(temp_audio_raw)
+                    if audio_res.mitigated_output and Path(audio_res.mitigated_output).exists():
+                        sanitized_audio_path = Path(audio_res.mitigated_output)
+                    for ent in audio_res.entities:
+                        lbl = f"AUDIO_{ent.label.upper()}"
+                        redacted_labels.add(lbl)
+                        audio_entities.append({
+                            "label": lbl,
+                            "text": ent.text,
+                            "mitigation": ent.mitigation,
+                            "confidence": ent.confidence,
+                        })
+                    LOGGER.info(
+                        "Audio mitigation complete: %d spoken entities detected.", len(audio_entities)
+                    )
+            else:
+                LOGGER.info("No audio stream detected in video container; skipping audio mitigation.")
+        except Exception as exc:
+            LOGGER.warning("Audio mitigation in video failed: %s. Preserving original audio.", exc)
+
+    # Reconstruct with audio (sanitized if available, else original)
+    reconstruct_with_audio(
+        temp_video,
+        video_path,
+        output_path,
+        sanitized_audio_path=sanitized_audio_path,
+    )
     shutil.rmtree(temp_dir, ignore_errors=True)
 
     return {
@@ -1052,6 +1132,8 @@ def process_selective_video(
         "faces_blurred": len(target_faces),
         "target_face_ids": target_ids,
         "sensitive_items_redacted": len(text_trackers),
+        "audio_mitigated": bool(sanitized_audio_path and sanitized_audio_path.exists()),
+        "audio_entities": audio_entities,
         "redacted_entities": sorted(list(redacted_labels)),
         "output_path": str(output_path),
     }

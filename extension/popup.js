@@ -106,6 +106,9 @@ const sanitizedVideoEl = document.getElementById("sanitized-video");
 const videoEntitiesList = document.getElementById("video-entities-list");
 const videoNoEntities = document.getElementById("video-no-entities");
 const videoDownloadBtn = document.getElementById("video-download-btn");
+const videoMitigateAudioToggle = document.getElementById("video-mitigate-audio-toggle");
+const videoAudioHint = document.getElementById("video-audio-hint");
+const videoAudioMitigatedBadge = document.getElementById("video-audio-mitigated-badge");
 
 // Tabs
 const tabButtons = document.querySelectorAll(".tab");
@@ -235,7 +238,11 @@ function renderEntityList(listElement, emptyElement, entities) {
     emptyElement.classList.add("hidden");
     unique.forEach((label) => {
       const li = document.createElement("li");
-      li.textContent = `• ${label}`;
+      if (label.startsWith("AUDIO_")) {
+        li.textContent = `• 🔊 Spoken ${label.replace("AUDIO_", "")} (Audio Tone-Masked)`;
+      } else {
+        li.textContent = `• ${label}`;
+      }
       listElement.appendChild(li);
     });
   }
@@ -1068,6 +1075,7 @@ async function handleVideoSelected(event) {
   if (videoPreviewPanel) videoPreviewPanel.classList.add("hidden");
   if (videoAnnotatedFrameContainer) videoAnnotatedFrameContainer.classList.add("hidden");
   if (videoFaceGrid) videoFaceGrid.innerHTML = "";
+  if (videoAudioMitigatedBadge) videoAudioMitigatedBadge.classList.add("hidden");
   detectedVideoFaces = [];
   selectedFaceIds.clear();
 
@@ -1130,6 +1138,24 @@ async function handleVideoSelected(event) {
 
     if (videoFaceSelectionPanel) {
       videoFaceSelectionPanel.classList.remove("hidden");
+    }
+
+    if (data.has_audio === false) {
+      if (videoMitigateAudioToggle) {
+        videoMitigateAudioToggle.checked = false;
+        videoMitigateAudioToggle.disabled = true;
+      }
+      if (videoAudioHint) {
+        videoAudioHint.textContent = "No audio stream detected in this video.";
+      }
+    } else {
+      if (videoMitigateAudioToggle) {
+        videoMitigateAudioToggle.disabled = false;
+        videoMitigateAudioToggle.checked = true;
+      }
+      if (videoAudioHint) {
+        videoAudioHint.textContent = "Transcribe speech & beep/mute spoken PII (names, phone numbers, IDs)";
+      }
     }
     videoSanitizeBtn.disabled = false;
     if (videoApplySelectiveBtn) {
@@ -1261,10 +1287,12 @@ async function handleSelectiveSanitize(options = {}) {
 
   const redactToggle = document.getElementById("video-redact-sensitive-toggle");
   const redactSensitive = redactToggle ? redactToggle.checked : true;
+  const audioToggle = document.getElementById("video-mitigate-audio-toggle");
+  const mitigateAudio = audioToggle && !audioToggle.disabled ? audioToggle.checked : false;
 
   const activeBtn = isBlurAll ? videoSanitizeBtn : videoApplySelectiveBtn;
   activeBtn.classList.add("loading");
-  activeBtn.textContent = "Sanitizing…";
+  activeBtn.textContent = mitigateAudio ? "Sanitizing (Video + Audio)…" : "Sanitizing…";
   videoApplySelectiveBtn.disabled = true;
   videoSanitizeBtn.disabled = true;
   videoDownloadBtn.disabled = true;
@@ -1276,6 +1304,7 @@ async function handleSelectiveSanitize(options = {}) {
     formData.append("mode", mode);
     formData.append("blur_strength", String(blurStrength));
     formData.append("redact_sensitive_info", redactSensitive ? "true" : "false");
+    formData.append("mitigate_audio", mitigateAudio ? "true" : "false");
 
     const response = await fetchWithTimeout(
       VIDEO_SELECTIVE_ENDPOINT,
@@ -1305,6 +1334,18 @@ async function handleSelectiveSanitize(options = {}) {
       videoNoEntities,
       result.redacted_entities || extractEntityLabels(result.entities)
     );
+
+    if (videoAudioMitigatedBadge) {
+      if (result.audio_mitigated) {
+        const spokenCount = result.audio_entities_detected || 0;
+        videoAudioMitigatedBadge.innerHTML = `<span style="font-size: 11px; font-weight: 600; color: #22c55e;">
+          🔊 Audio Privacy Protected — ${spokenCount > 0 ? spokenCount + " spoken PII item(s) tone-masked with audio beeps" : "Speech transcribed & verified clean"}
+        </span>`;
+        videoAudioMitigatedBadge.classList.remove("hidden");
+      } else {
+        videoAudioMitigatedBadge.classList.add("hidden");
+      }
+    }
 
     videoPreviewPanel.classList.remove("hidden");
     videoDownloadBtn.disabled = false;

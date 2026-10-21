@@ -121,6 +121,8 @@ class SelectiveVideoScanResponse(ScanResponse):
     faces_blurred: int = 0
     selected_faces: list[int] = Field(default_factory=list)
     mode: str = "blur_selected"
+    audio_mitigated: bool = False
+    audio_entities_detected: int = 0
 
 
 @app.get("/health")
@@ -326,6 +328,8 @@ async def scan_video_upload(file: UploadFile = File(...)) -> ScanResponse:
             mode="blur_all",
             blur_strength=51,
             redact_sensitive_info=True,
+            mitigate_audio=True,
+            pipeline_manager=PIPELINE,
         )
 
         relative_download_url = f"/artifacts/download?path={output_path.name}"
@@ -443,6 +447,7 @@ async def scan_video_selective(request: Request) -> dict[str, Any]:
     mode: str = "blur_selected"
     blur_strength: int = 51
     redact_sensitive_info: bool = True
+    mitigate_audio: bool = True
 
     try:
         if "multipart/form-data" in content_type:
@@ -473,6 +478,8 @@ async def scan_video_selective(request: Request) -> dict[str, Any]:
             mode = str(form.get("mode", "blur_selected")).strip()
             if "redact_sensitive_info" in form:
                 redact_sensitive_info = str(form.get("redact_sensitive_info", "true")).lower() in ("true", "1", "yes")
+            if "mitigate_audio" in form:
+                mitigate_audio = str(form.get("mitigate_audio", "true")).lower() in ("true", "1", "yes")
             try:
                 blur_strength = int(form.get("blur_strength", 51))
             except (ValueError, TypeError):
@@ -490,6 +497,8 @@ async def scan_video_selective(request: Request) -> dict[str, Any]:
             mode = str(body.get("mode", "blur_selected")).strip()
             if "redact_sensitive_info" in body:
                 redact_sensitive_info = bool(body.get("redact_sensitive_info"))
+            if "mitigate_audio" in body:
+                mitigate_audio = bool(body.get("mitigate_audio"))
             try:
                 blur_strength = int(body.get("blur_strength", 51))
             except (ValueError, TypeError):
@@ -510,6 +519,8 @@ async def scan_video_selective(request: Request) -> dict[str, Any]:
                 blur_strength = int(form.get("blur_strength", 51))
                 if "redact_sensitive_info" in form:
                     redact_sensitive_info = str(form.get("redact_sensitive_info", "true")).lower() in ("true", "1", "yes")
+                if "mitigate_audio" in form:
+                    mitigate_audio = str(form.get("mitigate_audio", "true")).lower() in ("true", "1", "yes")
             else:
                 raise HTTPException(status_code=400, detail="Provide a video file upload or JSON with path/url.")
 
@@ -528,6 +539,8 @@ async def scan_video_selective(request: Request) -> dict[str, Any]:
             mode=mode,
             blur_strength=blur_strength,
             redact_sensitive_info=redact_sensitive_info,
+            mitigate_audio=mitigate_audio,
+            pipeline_manager=PIPELINE,
         )
 
         relative_download_url = f"/artifacts/download?path={output_path.name}"
@@ -541,10 +554,19 @@ async def scan_video_selective(request: Request) -> dict[str, Any]:
             }
             for fid in res.get("target_face_ids", [])
         ]
+        for a_ent in res.get("audio_entities", []):
+            entities.append({
+                "modality": "audio",
+                "label": a_ent.get("label", "audio_pii"),
+                "confidence": a_ent.get("confidence", 0.8),
+                "mitigation": a_ent.get("mitigation", "tone_mask"),
+                "text": a_ent.get("text"),
+            })
         redacted_entities = res.get("redacted_entities", ["FACE"] if entities else [])
+        audio_info = f"Audio mitigated: {res.get('audio_mitigated', False)} ({len(res.get('audio_entities', []))} spoken entities)."
         audit_log = (
             f"Selective face blur applied. Mode: {mode}. Selected IDs: {selected_faces}. "
-            f"Blurred face IDs: {res.get('target_face_ids', [])}. Frames processed: {res.get('total_frames', 0)}."
+            f"Blurred face IDs: {res.get('target_face_ids', [])}. Frames processed: {res.get('total_frames', 0)}. {audio_info}"
         )
 
         return {
@@ -557,6 +579,8 @@ async def scan_video_selective(request: Request) -> dict[str, Any]:
             "faces_blurred": res.get("faces_blurred", 0),
             "selected_faces": selected_faces,
             "mode": mode,
+            "audio_mitigated": res.get("audio_mitigated", False),
+            "audio_entities_detected": len(res.get("audio_entities", [])),
             "audit_log": audit_log,
             "entities": entities,
             "redacted_entities": redacted_entities,
