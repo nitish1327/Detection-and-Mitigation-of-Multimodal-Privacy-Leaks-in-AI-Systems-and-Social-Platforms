@@ -122,14 +122,20 @@
         <div class="image-compare">
           <div class="compare-block">
             <span class="label">Original</span>
-            <div class="image-frame">
+            <div class="image-frame" id="original-image-frame" title="Click to view full original image">
               <img id="original-image" alt="Original upload preview" />
             </div>
           </div>
           <div class="compare-block">
             <span class="label">Sanitized</span>
-            <div class="image-frame highlight">
-              <img id="sanitized-image" alt="Sanitized image preview" />
+            <div class="image-frame highlight" id="sanitized-image-frame" title="Click to view full sanitized image">
+              <div id="sanitized-placeholder" class="preview-empty-state">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.5; margin-bottom:4px;">
+                  <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+                </svg>
+                <span>Ready to sanitize</span>
+              </div>
+              <img id="sanitized-image" class="hidden" alt="Sanitized image preview" />
             </div>
           </div>
         </div>
@@ -143,6 +149,9 @@
         <div class="actions">
           <button id="download-btn" type="button" class="btn btn-accent" disabled>
             Download Sanitized Image
+          </button>
+          <button id="image-clear-btn" type="button" class="btn btn-secondary" title="Clear current image and scan another">
+            New Scan
           </button>
         </div>
       </section>
@@ -349,6 +358,32 @@
     <footer class="footer">
       <span>localhost:8000 only · no cloud · no storage</span>
     </footer>
+
+    <!-- Media Lightbox / Full View Modal (Prevents popup auto-close) -->
+    <div id="media-lightbox-modal" class="lightbox-modal hidden" role="dialog" aria-modal="true" aria-label="Full Media Preview">
+      <div id="lightbox-backdrop" class="lightbox-backdrop"></div>
+      <div class="lightbox-dialog">
+        <div class="lightbox-header">
+          <div class="lightbox-info">
+            <span id="lightbox-mode-badge" class="lightbox-badge badge-sanitized">SANITIZED</span>
+            <span id="lightbox-filename" class="lightbox-filename" title="">Preview</span>
+          </div>
+          <div class="lightbox-actions">
+            <button id="lightbox-toggle-btn" type="button" class="btn-lightbox hidden" title="Toggle between original and sanitized view">Show Original</button>
+            <button id="lightbox-open-tab-btn" type="button" class="btn-lightbox" title="Open in persistent browser tab">Open in Tab</button>
+            <button id="lightbox-download-btn" type="button" class="btn-lightbox btn-lightbox-download" title="Download Sanitized File">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+              <span>Download</span>
+            </button>
+            <button id="lightbox-close-btn" type="button" class="lightbox-close-btn" title="Close Full View (Esc)" aria-label="Close">✕</button>
+          </div>
+        </div>
+        <div class="lightbox-body">
+          <img id="lightbox-image" class="lightbox-content-media hidden" alt="Full Image Preview" />
+          <video id="lightbox-video" class="lightbox-content-media hidden" controls playsinline></video>
+        </div>
+      </div>
+    </div>
 
     <script src="popup.js"></script>
   </body>

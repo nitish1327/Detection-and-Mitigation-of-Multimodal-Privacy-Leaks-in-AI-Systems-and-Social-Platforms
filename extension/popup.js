@@ -72,10 +72,26 @@ const imageSanitizeBtn = document.getElementById("image-sanitize-btn");
 const imagePreviewPanel = document.getElementById("image-preview-panel");
 const originalImageEl = document.getElementById("original-image");
 const sanitizedImageEl = document.getElementById("sanitized-image");
+const sanitizedPlaceholder = document.getElementById("sanitized-placeholder");
+const originalImageFrame = document.getElementById("original-image-frame");
+const sanitizedImageFrame = document.getElementById("sanitized-image-frame");
 const imageEntitiesList = document.getElementById("image-entities-list");
 const imageNoEntities = document.getElementById("image-no-entities");
 const downloadBtn = document.getElementById("download-btn");
+const imageClearBtn = document.getElementById("image-clear-btn");
 const imageExpandBtn = document.getElementById("image-expand-btn");
+
+// Lightbox modal elements
+const mediaLightboxModal = document.getElementById("media-lightbox-modal");
+const lightboxBackdrop = document.getElementById("lightbox-backdrop");
+const lightboxModeBadge = document.getElementById("lightbox-mode-badge");
+const lightboxFilename = document.getElementById("lightbox-filename");
+const lightboxToggleBtn = document.getElementById("lightbox-toggle-btn");
+const lightboxOpenTabBtn = document.getElementById("lightbox-open-tab-btn");
+const lightboxDownloadBtn = document.getElementById("lightbox-download-btn");
+const lightboxCloseBtn = document.getElementById("lightbox-close-btn");
+const lightboxImage = document.getElementById("lightbox-image");
+const lightboxVideo = document.getElementById("lightbox-video");
 
 
 // Audio tab
@@ -151,6 +167,7 @@ let selectedFaceIds = new Set();
 
 document.addEventListener("DOMContentLoaded", () => {
   initMaximizeUi();
+  initLightbox();
   checkBackendHealth();
   initTabs();
   initTextTab();
@@ -621,20 +638,342 @@ function isSupportedLlmUrl(url) {
 // Image tab
 // =============================================================================
 
+// =============================================================================
+// IndexedDB Session Persistence (Restores state when popup reopens)
+// =============================================================================
+
+const DB_NAME = "leakwatch_session_db";
+const DB_VERSION = 1;
+const STORE_NAME = "sessions";
+
+function openSessionDb() {
+  return new Promise((resolve, reject) => {
+    if (!window.indexedDB) {
+      resolve(null);
+      return;
+    }
+    const request = window.indexedDB.open(DB_NAME, DB_VERSION);
+    request.onupgradeneeded = (e) => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains(STORE_NAME)) {
+        db.createObjectStore(STORE_NAME, { keyPath: "id" });
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => {
+      console.warn("IndexedDB error:", request.error);
+      resolve(null);
+    };
+  });
+}
+
+async function saveImageSession(data) {
+  try {
+    const db = await openSessionDb();
+    if (!db) return;
+    return new Promise((resolve) => {
+      const tx = db.transaction(STORE_NAME, "readwrite");
+      const store = tx.objectStore(STORE_NAME);
+      store.put({ id: "current_image", timestamp: Date.now(), ...data });
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+    });
+  } catch (err) {
+    console.warn("Failed to save image session:", err);
+  }
+}
+
+async function loadImageSession() {
+  try {
+    const db = await openSessionDb();
+    if (!db) return null;
+    return new Promise((resolve) => {
+      const tx = db.transaction(STORE_NAME, "readonly");
+      const store = tx.objectStore(STORE_NAME);
+      const req = store.get("current_image");
+      req.onsuccess = () => {
+        const result = req.result;
+        // Keep valid for up to 4 hours
+        if (result && Date.now() - result.timestamp < 4 * 3600 * 1000) {
+          resolve(result);
+        } else {
+          resolve(null);
+        }
+      };
+      req.onerror = () => resolve(null);
+    });
+  } catch (err) {
+    console.warn("Failed to load image session:", err);
+    return null;
+  }
+}
+
+async function clearImageSession() {
+  try {
+    const db = await openSessionDb();
+    if (!db) return;
+    return new Promise((resolve) => {
+      const tx = db.transaction(STORE_NAME, "readwrite");
+      const store = tx.objectStore(STORE_NAME);
+      store.delete("current_image");
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+    });
+  } catch (err) {
+    console.warn("Failed to clear image session:", err);
+  }
+}
+
+// =============================================================================
+// Lightbox / Full View Modal (Stays in popup to prevent auto-close)
+// =============================================================================
+
+let currentLightboxData = null;
+
+function openLightbox(options) {
+  if (!mediaLightboxModal) return;
+  currentLightboxData = options;
+
+  if (lightboxFilename) {
+    lightboxFilename.textContent = options.filename || "Preview";
+    lightboxFilename.title = options.filename || "";
+  }
+
+  updateLightboxBadge(options.isSanitized);
+
+  if (options.type === "image") {
+    if (lightboxVideo) {
+      lightboxVideo.classList.add("hidden");
+      lightboxVideo.pause();
+      lightboxVideo.removeAttribute("src");
+    }
+
+    if (lightboxImage) {
+      lightboxImage.src = options.activeUrl;
+      lightboxImage.classList.remove("hidden");
+    }
+
+    if (lightboxToggleBtn) {
+      if (options.originalUrl && options.sanitizedUrl) {
+        lightboxToggleBtn.classList.remove("hidden");
+        lightboxToggleBtn.textContent = options.isSanitized ? "Show Original" : "Show Sanitized";
+      } else {
+        lightboxToggleBtn.classList.add("hidden");
+      }
+    }
+  } else if (options.type === "video") {
+    if (lightboxImage) {
+      lightboxImage.classList.add("hidden");
+      lightboxImage.removeAttribute("src");
+    }
+    if (lightboxToggleBtn) {
+      lightboxToggleBtn.classList.add("hidden");
+    }
+
+    if (lightboxVideo) {
+      lightboxVideo.src = options.activeUrl;
+      lightboxVideo.classList.remove("hidden");
+    }
+  }
+
+  mediaLightboxModal.classList.remove("hidden");
+}
+
+function updateLightboxBadge(isSanitized) {
+  if (!lightboxModeBadge) return;
+  if (isSanitized) {
+    lightboxModeBadge.textContent = "SANITIZED";
+    lightboxModeBadge.className = "lightbox-badge badge-sanitized";
+  } else {
+    lightboxModeBadge.textContent = "ORIGINAL";
+    lightboxModeBadge.className = "lightbox-badge badge-original";
+  }
+}
+
+function toggleLightboxCompare() {
+  if (!currentLightboxData || currentLightboxData.type !== "image") return;
+  const nextSanitized = !currentLightboxData.isSanitized;
+  const nextUrl = nextSanitized ? currentLightboxData.sanitizedUrl : currentLightboxData.originalUrl;
+
+  if (nextUrl && lightboxImage) {
+    lightboxImage.src = nextUrl;
+    currentLightboxData.activeUrl = nextUrl;
+    currentLightboxData.isSanitized = nextSanitized;
+    updateLightboxBadge(nextSanitized);
+    if (lightboxToggleBtn) {
+      lightboxToggleBtn.textContent = nextSanitized ? "Show Original" : "Show Sanitized";
+    }
+  }
+}
+
+function closeLightbox() {
+  if (!mediaLightboxModal) return;
+  mediaLightboxModal.classList.add("hidden");
+  if (lightboxVideo) {
+    lightboxVideo.pause();
+    lightboxVideo.removeAttribute("src");
+  }
+  if (lightboxImage) {
+    lightboxImage.removeAttribute("src");
+  }
+  currentLightboxData = null;
+}
+
+function handleLightboxDownload() {
+  if (!currentLightboxData || !currentLightboxData.downloadBlob) {
+    if (currentLightboxData?.type === "video") {
+      handleDownloadVideo();
+    } else {
+      handleDownloadImage();
+    }
+    return;
+  }
+  const url = URL.createObjectURL(currentLightboxData.downloadBlob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = currentLightboxData.filename || "sanitized_media";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function handleLightboxOpenTab() {
+  const activeTab = currentLightboxData?.type === "video" ? "video" : "image";
+  const targetUrl = chrome?.runtime?.getURL
+    ? chrome.runtime.getURL(`popup.html?mode=tab&tab=${activeTab}`)
+    : `popup.html?mode=tab&tab=${activeTab}`;
+  if (chrome?.tabs?.create) {
+    chrome.tabs.create({ url: targetUrl });
+  } else {
+    window.open(targetUrl, "_blank");
+  }
+}
+
+function initLightbox() {
+  if (lightboxCloseBtn) lightboxCloseBtn.addEventListener("click", closeLightbox);
+  if (lightboxBackdrop) lightboxBackdrop.addEventListener("click", closeLightbox);
+  if (lightboxToggleBtn) lightboxToggleBtn.addEventListener("click", toggleLightboxCompare);
+  if (lightboxDownloadBtn) lightboxDownloadBtn.addEventListener("click", handleLightboxDownload);
+  if (lightboxOpenTabBtn) lightboxOpenTabBtn.addEventListener("click", handleLightboxOpenTab);
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && mediaLightboxModal && !mediaLightboxModal.classList.contains("hidden")) {
+      closeLightbox();
+    }
+  });
+}
+
+// =============================================================================
+// Image tab
+// =============================================================================
+
 function initImageTab() {
   imageInput.addEventListener("change", handleImageSelected);
   imageSanitizeBtn.addEventListener("click", handleImageSanitize);
   downloadBtn.addEventListener("click", handleDownloadImage);
+  if (imageClearBtn) {
+    imageClearBtn.addEventListener("click", handleImageClear);
+  }
   if (imageExpandBtn) {
     imageExpandBtn.addEventListener("click", handleImageExpand);
   }
+  if (originalImageFrame) {
+    originalImageFrame.addEventListener("click", () => {
+      if (originalImageUrl) {
+        openLightbox({
+          type: "image",
+          activeUrl: originalImageUrl,
+          originalUrl: originalImageUrl,
+          sanitizedUrl: sanitizedImageUrl,
+          isSanitized: false,
+          filename: selectedImageFile?.name || "original_image",
+          downloadBlob: selectedImageFile,
+        });
+      }
+    });
+  }
+  if (sanitizedImageFrame) {
+    sanitizedImageFrame.addEventListener("click", () => {
+      if (sanitizedImageUrl) {
+        openLightbox({
+          type: "image",
+          activeUrl: sanitizedImageUrl,
+          originalUrl: originalImageUrl,
+          sanitizedUrl: sanitizedImageUrl,
+          isSanitized: true,
+          filename: sanitizedDownloadName,
+          downloadBlob: sanitizedImageBlob,
+        });
+      }
+    });
+  }
+
+  // Restore saved session if user reopened popup
+  void (async () => {
+    const saved = await loadImageSession();
+    if (saved && saved.sanitizedBlob) {
+      sanitizedImageBlob = saved.sanitizedBlob;
+      sanitizedDownloadName = saved.downloadName || "sanitized.png";
+      sanitizedImageUrl = URL.createObjectURL(sanitizedImageBlob);
+      sanitizedImageEl.src = sanitizedImageUrl;
+      sanitizedImageEl.classList.remove("hidden");
+      if (sanitizedPlaceholder) {
+        sanitizedPlaceholder.classList.add("hidden");
+      }
+      downloadBtn.disabled = false;
+
+      if (saved.originalBlob) {
+        originalImageUrl = URL.createObjectURL(saved.originalBlob);
+        originalImageEl.src = originalImageUrl;
+        try {
+          selectedImageFile = new File([saved.originalBlob], saved.filename || "image.png", {
+            type: saved.fileType || saved.originalBlob.type || "image/png",
+          });
+          imageSanitizeBtn.disabled = false;
+        } catch {
+          selectedImageFile = saved.originalBlob;
+        }
+      }
+
+      if (saved.entities && saved.entities.length) {
+        renderEntityList(imageEntitiesList, imageNoEntities, saved.entities);
+      }
+
+      imagePreviewPanel.classList.remove("hidden");
+    }
+  })();
 }
 
 function handleImageExpand() {
   const target = sanitizedImageUrl || originalImageUrl;
-  if (target) {
-    window.open(target, "_blank");
+  if (!target) return;
+  openLightbox({
+    type: "image",
+    activeUrl: target,
+    originalUrl: originalImageUrl,
+    sanitizedUrl: sanitizedImageUrl,
+    isSanitized: Boolean(sanitizedImageUrl),
+    filename: sanitizedDownloadName || selectedImageFile?.name || "image.png",
+    downloadBlob: sanitizedImageBlob || selectedImageFile,
+  });
+}
+
+function handleImageClear() {
+  revokeImageUrls();
+  void clearImageSession();
+  selectedImageFile = null;
+  imageInput.value = "";
+  imageSanitizeBtn.disabled = true;
+  downloadBtn.disabled = true;
+  imagePreviewPanel.classList.add("hidden");
+  if (sanitizedPlaceholder) {
+    sanitizedPlaceholder.classList.remove("hidden");
   }
+  sanitizedImageEl.classList.add("hidden");
+  originalImageEl.removeAttribute("src");
+  sanitizedImageEl.removeAttribute("src");
+  clearError();
 }
 
 function revokeImageUrls() {
@@ -652,8 +991,13 @@ function revokeImageUrls() {
 function handleImageSelected(event) {
   clearError();
   revokeImageUrls();
+  void clearImageSession();
   downloadBtn.disabled = true;
   sanitizedImageEl.removeAttribute("src");
+  sanitizedImageEl.classList.add("hidden");
+  if (sanitizedPlaceholder) {
+    sanitizedPlaceholder.classList.remove("hidden");
+  }
 
   const file = event.target.files?.[0];
   if (!file) {
@@ -700,16 +1044,31 @@ async function handleImageSanitize() {
     sanitizedImageBlob = blob;
     sanitizedImageUrl = URL.createObjectURL(blob);
     sanitizedImageEl.src = sanitizedImageUrl;
+    sanitizedImageEl.classList.remove("hidden");
+    if (sanitizedPlaceholder) {
+      sanitizedPlaceholder.classList.add("hidden");
+    }
 
     const stem = selectedImageFile.name.replace(/\.[^.]+$/, "");
     const ext = guessExtensionFromBlob(blob) || ".png";
     sanitizedDownloadName = `${stem}.sanitized${ext}`;
 
+    const labels = result.redacted_entities || extractEntityLabels(result.entities);
     renderEntityList(
       imageEntitiesList,
       imageNoEntities,
-      result.redacted_entities || extractEntityLabels(result.entities)
+      labels
     );
+
+    // Save state to IndexedDB so reopening extension preserves image + download
+    void saveImageSession({
+      filename: selectedImageFile.name,
+      fileType: selectedImageFile.type,
+      downloadName: sanitizedDownloadName,
+      originalBlob: selectedImageFile,
+      sanitizedBlob: blob,
+      entities: labels,
+    });
 
     imagePreviewPanel.classList.remove("hidden");
     downloadBtn.disabled = false;
@@ -1176,7 +1535,14 @@ function initVideoTab() {
 
 function handleVideoExpand() {
   if (sanitizedVideoUrl) {
-    window.open(sanitizedVideoUrl, "_blank");
+    openLightbox({
+      type: "video",
+      activeUrl: sanitizedVideoUrl,
+      sanitizedUrl: sanitizedVideoUrl,
+      isSanitized: true,
+      filename: sanitizedVideoDownloadName || "sanitized.mp4",
+      downloadBlob: sanitizedVideoBlob,
+    });
   }
 }
 
