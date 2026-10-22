@@ -234,7 +234,7 @@ class TextDetector:
                         confidence=0.85,
                         text=candidate,
                         span=Span(start=cand_start, end=cand_end),
-                        detection_method="pattern",
+                        detection_method="heuristic",
                     )
                 )
 
@@ -254,9 +254,14 @@ class TextDetector:
                             confidence=0.85,
                             text=m.group(1),
                             span=Span(start=n_start, end=n_end),
-                            detection_method="pattern",
+                            detection_method="heuristic",
+                            metadata={"locale": "en_IN"},
                         )
                     )
+
+        # 4. Hinglish, regional vernacular, and Indian PII patterns
+        hinglish_entities = self._detect_hinglish_entities(text, filtered_entities)
+        filtered_entities.extend(hinglish_entities)
 
         # Primitive document-level gender detection for name replacement
         text_lower = text.lower()
@@ -281,6 +286,142 @@ class TextDetector:
                     ent.metadata["gender"] = doc_gender
 
         return filtered_entities
+
+    def _detect_hinglish_entities(
+        self, text: str, existing_entities: list[DetectedEntity]
+    ) -> list[DetectedEntity]:
+        """Detect Hinglish, transliterated vernacular, and regional Indian PII patterns."""
+        results: list[DetectedEntity] = []
+
+        def _is_covered(start: int, end: int) -> bool:
+            return any(
+                ent.span and not (ent.span.end <= start or ent.span.start >= end)
+                for ent in existing_entities + results
+            )
+
+        # 1. Transliterated / Hinglish Introductions: "Mera naam Rahul Verma hai" / "Mera name ..."
+        hinglish_name_pattern = re.compile(
+            r"\b(?:mera\s+naam|meri\s+naam|humara\s+naam|naam\s+hai|name\s+hai|shri|smt|kumari)\s+([A-Z][a-zA-Z'\-]{1,25}(?:\s+[A-Z][a-zA-Z'\-]{1,25})?)\b",
+            re.IGNORECASE,
+        )
+        for m in hinglish_name_pattern.finditer(text):
+            cand = m.group(1).strip()
+            start, end = m.start(1), m.end(1)
+            if cand.lower() not in NON_PERSON_INTRO_WORDS and not _is_covered(start, end):
+                results.append(
+                    DetectedEntity(
+                        modality=Modality.TEXT,
+                        label="PERSON",
+                        confidence=0.90,
+                        text=cand,
+                        span=Span(start=start, end=end),
+                        detection_method="heuristic",
+                        metadata={"locale": "en_IN"},
+                    )
+                )
+
+        # 2. Hinglish Phone: "Mera phone number 9876543210 hai" / "Sampark sankhya: ..."
+        hinglish_phone_pattern = re.compile(
+            r"\b(?:phone\s+number|mobile\s+number|mera\s+number|sampark\s+karein|durvash)\s*(?:hai|no|number)?\s*[:=-]?\s*(\+?91[\s-]?[6-9]\d{9}|[6-9]\d{9})\b",
+            re.IGNORECASE,
+        )
+        for m in hinglish_phone_pattern.finditer(text):
+            num = m.group(1).strip()
+            start, end = m.start(1), m.end(1)
+            if not _is_covered(start, end):
+                results.append(
+                    DetectedEntity(
+                        modality=Modality.TEXT,
+                        label="phone_numbers",
+                        confidence=0.95,
+                        text=num,
+                        span=Span(start=start, end=end),
+                        mitigation="mask",
+                        detection_method="regex",
+                        metadata={"locale": "en_IN"},
+                    )
+                )
+
+        # 3. Hinglish Address / Residence: "Mera pata 123 MG Road, Indiranagar hai"
+        hinglish_addr_pattern = re.compile(
+            r"\b(?:mera\s+pata|ghar\s+ka\s+pata|sthit\s+hai|rehte\s+hain|nivas)\s*(?:hai)?\s*[:=-]?\s*([A-Za-z0-9\s,/\-]{8,60})\s+(?:hai|mein|me|sthit)\b",
+            re.IGNORECASE,
+        )
+        for m in hinglish_addr_pattern.finditer(text):
+            addr = m.group(1).strip()
+            start, end = m.start(1), m.end(1)
+            if not _is_covered(start, end):
+                results.append(
+                    DetectedEntity(
+                        modality=Modality.TEXT,
+                        label="GPE",
+                        confidence=0.85,
+                        text=addr,
+                        span=Span(start=start, end=end),
+                        detection_method="heuristic",
+                        metadata={"locale": "en_IN"},
+                    )
+                )
+
+        # 4. Devanagari script detection (Hindi vernacular)
+        devanagari_name_pattern = re.compile(
+            r"(?:मेरा\s+नाम|नाम\s+है)\s+([\u0900-\u097F]+(?:\s+[\u0900-\u097F]+)?)"
+        )
+        for m in devanagari_name_pattern.finditer(text):
+            val = m.group(1).strip()
+            start, end = m.start(1), m.end(1)
+            if not _is_covered(start, end):
+                results.append(
+                    DetectedEntity(
+                        modality=Modality.TEXT,
+                        label="PERSON",
+                        confidence=0.92,
+                        text=val,
+                        span=Span(start=start, end=end),
+                        detection_method="heuristic",
+                        metadata={"locale": "hi_IN"},
+                    )
+                )
+
+        # 5. Indian PAN card pattern: 5 letters, 4 digits, 1 letter
+        pan_pattern = re.compile(r"\b([A-Z]{5}[0-9]{4}[A-Z])\b")
+        for m in pan_pattern.finditer(text):
+            val = m.group(1)
+            start, end = m.start(1), m.end(1)
+            if not _is_covered(start, end):
+                results.append(
+                    DetectedEntity(
+                        modality=Modality.TEXT,
+                        label="PAN",
+                        confidence=0.98,
+                        text=val,
+                        span=Span(start=start, end=end),
+                        mitigation="mask",
+                        detection_method="regex",
+                        metadata={"locale": "en_IN"},
+                    )
+                )
+
+        # 6. Indian Vehicle Registration: e.g. KA 01 AB 1234, DL-3C-AB-1234
+        vehicle_pattern = re.compile(r"\b([A-Z]{2}[ -]?[0-9]{1,2}[ -]?[A-Z]{1,3}[ -]?[0-9]{4})\b")
+        for m in vehicle_pattern.finditer(text):
+            val = m.group(1)
+            start, end = m.start(1), m.end(1)
+            if any(c.isdigit() for c in val) and any(c.isalpha() for c in val) and not _is_covered(start, end):
+                results.append(
+                    DetectedEntity(
+                        modality=Modality.TEXT,
+                        label="LICENSE_PLATE",
+                        confidence=0.92,
+                        text=val,
+                        span=Span(start=start, end=end),
+                        mitigation="mask",
+                        detection_method="regex",
+                        metadata={"locale": "en_IN"},
+                    )
+                )
+
+        return results
 
     def _spacy_entities(self, text: str) -> Iterable[DetectedEntity]:
         if not self._nlp:

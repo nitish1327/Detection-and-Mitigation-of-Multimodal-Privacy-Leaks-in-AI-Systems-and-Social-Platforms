@@ -1,12 +1,13 @@
 {
   "manifest_version": 3,
   "name": "Privacy Sandbox",
-  "version": "1.1.0",
-  "description": "Sanitize text and images locally via LeakWatch before sharing with LLMs or downloads.",
+  "version": "1.2.0",
+  "description": "Sanitize text, images, audio and video locally via LeakWatch before sharing with LLMs or social platforms.",
   "permissions": [
     "clipboardWrite",
     "sidePanel",
-    "tabs"
+    "tabs",
+    "storage"
   ],
   "host_permissions": [
     "http://localhost:8000/*",
@@ -14,7 +15,14 @@
     "https://chat.openai.com/*",
     "https://chatgpt.com/*",
     "https://gemini.google.com/*",
-    "https://claude.ai/*"
+    "https://claude.ai/*",
+    "https://*.perplexity.ai/*",
+    "https://copilot.microsoft.com/*",
+    "https://huggingface.co/chat/*",
+    "https://poe.com/*",
+    "https://twitter.com/*",
+    "https://x.com/*",
+    "https://*.linkedin.com/*"
   ],
   "action": {
     "default_title": "Privacy Sandbox",
@@ -49,6 +57,49 @@
     {
       "matches": [
         "https://claude.ai/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://*.perplexity.ai/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://copilot.microsoft.com/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://huggingface.co/chat/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://poe.com/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://twitter.com/*",
+        "https://x.com/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://*.linkedin.com/*"
       ],
       "js": ["content.js"],
       "run_at": "document_idle"

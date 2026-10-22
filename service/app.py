@@ -48,7 +48,7 @@ app.add_middleware(
 CONFIG = get_config()
 PIPELINE = PipelineManager(CONFIG)
 
-ALLOWED_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp", ".webp"}
+ALLOWED_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tiff", ".tif"}
 ALLOWED_IMAGE_CONTENT_TYPES = {
     "image/png",
     "image/jpeg",
@@ -56,6 +56,7 @@ ALLOWED_IMAGE_CONTENT_TYPES = {
     "image/bmp",
     "image/webp",
     "image/pjpeg",
+    "image/tiff",
 }
 
 ALLOWED_AUDIO_SUFFIXES = {".wav", ".mp3", ".m4a", ".aac", ".flac", ".ogg", ".opus", ".webm"}
@@ -609,6 +610,48 @@ def download_artifact(path: str) -> FileResponse:
     if not artifact_path.exists():
         raise HTTPException(status_code=404, detail=f"Artifact not found: {path}")
     return FileResponse(artifact_path, filename=artifact_path.name)
+
+
+@app.get("/audit/history")
+def get_audit_history(limit: int = 50) -> list[dict[str, Any]]:
+    """List recent audit logs from artifacts directory."""
+    artifacts_dir = Path("artifacts")
+    if not artifacts_dir.exists():
+        return []
+
+    logs = []
+    for log_path in sorted(artifacts_dir.glob("*.audit.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+        try:
+            with open(log_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            logs.append({
+                "filename": log_path.name,
+                "timestamp": data.get("timestamp"),
+                "modality": data.get("modality"),
+                "source": Path(data.get("source", "")).name,
+                "entity_count": data.get("entity_count", len(data.get("entities", []))),
+                "detection_mode": data.get("detection_mode"),
+                "output": Path(data.get("output", "")).name if data.get("output") else None,
+            })
+            if len(logs) >= limit:
+                break
+        except Exception:
+            continue
+    return logs
+
+
+@app.get("/audit/history/{filename}")
+def get_audit_log_file(filename: str) -> dict[str, Any]:
+    """Retrieve full audit log JSON content by filename."""
+    artifacts_dir = Path("artifacts")
+    file_path = artifacts_dir / filename
+    if not file_path.exists() or not filename.endswith(".audit.json"):
+        raise HTTPException(status_code=404, detail="Audit log file not found")
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to read audit log: {exc}")
 
 
 def _materialize_file(

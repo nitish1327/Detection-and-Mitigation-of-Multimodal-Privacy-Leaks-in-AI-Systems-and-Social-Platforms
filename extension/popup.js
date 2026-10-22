@@ -174,6 +174,8 @@ document.addEventListener("DOMContentLoaded", () => {
   initImageTab();
   initAudioTab();
   initVideoTab();
+  initPolicyTab();
+  initAuditTab();
 });
 
 chrome.runtime.onMessage.addListener((message) => {
@@ -275,7 +277,7 @@ function handleMaximize() {
 function initMaximizeUi() {
   const urlParams = new URLSearchParams(window.location.search);
   const requestedTab = urlParams.get("tab");
-  if (requestedTab && ["text", "image", "audio", "video"].includes(requestedTab)) {
+  if (requestedTab && ["text", "image", "audio", "video", "policy", "audit"].includes(requestedTab)) {
     switchTab(requestedTab);
   }
 
@@ -305,6 +307,9 @@ function switchTab(tabName) {
     panel.classList.toggle("active", panel.id === `tab-${tabName}`);
     panel.classList.toggle("hidden", panel.id !== `tab-${tabName}`);
   });
+  if (tabName === "audit") {
+    loadAuditHistory();
+  }
   clearError();
 }
 
@@ -1910,5 +1915,164 @@ async function resolveSanitizedMediaBlob(payload, defaultMimeType, timeoutMs) {
     throw new Error("Downloaded sanitized file is empty.");
   }
   return new Blob([blob], { type: defaultMimeType });
+}
+
+// ==================== POLICY TAB ====================
+const policyAllowlist = document.getElementById("policy-allowlist");
+const policyRegex = document.getElementById("policy-regex");
+const policyBlurStrength = document.getElementById("policy-blur-strength");
+const blurStrengthVal = document.getElementById("blur-strength-val");
+const policyAudioMask = document.getElementById("policy-audio-mask");
+const policySaveBtn = document.getElementById("policy-save-btn");
+const policyResetBtn = document.getElementById("policy-reset-btn");
+const policyStatusMsg = document.getElementById("policy-status-msg");
+
+function getStoredPolicy(callback) {
+  if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
+    chrome.storage.local.get(["leakwatch_policy"], (res) => {
+      callback(res.leakwatch_policy || {});
+    });
+  } else {
+    try {
+      const stored = localStorage.getItem("leakwatch_policy");
+      callback(stored ? JSON.parse(stored) : {});
+    } catch {
+      callback({});
+    }
+  }
+}
+
+function saveStoredPolicy(policy, callback) {
+  if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
+    chrome.storage.local.set({ leakwatch_policy: policy }, callback);
+  } else {
+    try {
+      localStorage.setItem("leakwatch_policy", JSON.stringify(policy));
+      if (callback) callback();
+    } catch {
+      if (callback) callback();
+    }
+  }
+}
+
+function initPolicyTab() {
+  if (policyBlurStrength && blurStrengthVal) {
+    policyBlurStrength.addEventListener("input", () => {
+      blurStrengthVal.textContent = policyBlurStrength.value;
+    });
+  }
+
+  getStoredPolicy((policy) => {
+    if (policyAllowlist && policy.allowlist) {
+      policyAllowlist.value = policy.allowlist.join("\n");
+    }
+    if (policyRegex && policy.custom_regex) {
+      policyRegex.value = policy.custom_regex.join("\n");
+    }
+    if (policyBlurStrength && policy.blur_strength) {
+      policyBlurStrength.value = policy.blur_strength;
+      if (blurStrengthVal) blurStrengthVal.textContent = policy.blur_strength;
+    }
+    if (policyAudioMask && policy.audio_mask_style) {
+      policyAudioMask.value = policy.audio_mask_style;
+    }
+  });
+
+  if (policySaveBtn) {
+    policySaveBtn.addEventListener("click", () => {
+      const allowlist = policyAllowlist ? policyAllowlist.value.split("\n").map(s => s.trim()).filter(Boolean) : [];
+      const regexRules = policyRegex ? policyRegex.value.split("\n").map(s => s.trim()).filter(Boolean) : [];
+      const blurStrength = policyBlurStrength ? parseInt(policyBlurStrength.value, 10) : 51;
+      const audioMask = policyAudioMask ? policyAudioMask.value : "beep";
+
+      const policy = {
+        allowlist,
+        custom_regex: regexRules,
+        blur_strength: blurStrength,
+        audio_mask_style: audioMask,
+      };
+
+      saveStoredPolicy(policy, () => {
+        if (policyStatusMsg) {
+          policyStatusMsg.textContent = "Settings saved successfully!";
+          policyStatusMsg.classList.remove("hidden");
+          setTimeout(() => policyStatusMsg.classList.add("hidden"), 3000);
+        }
+      });
+    });
+  }
+
+  if (policyResetBtn) {
+    policyResetBtn.addEventListener("click", () => {
+      if (policyAllowlist) policyAllowlist.value = "";
+      if (policyRegex) policyRegex.value = "";
+      if (policyBlurStrength) {
+        policyBlurStrength.value = 51;
+        if (blurStrengthVal) blurStrengthVal.textContent = "51";
+      }
+      if (policyAudioMask) policyAudioMask.value = "beep";
+      saveStoredPolicy({}, () => {
+        if (policyStatusMsg) {
+          policyStatusMsg.textContent = "Reset to default settings.";
+          policyStatusMsg.classList.remove("hidden");
+          setTimeout(() => {
+            policyStatusMsg.textContent = "Settings saved successfully!";
+            policyStatusMsg.classList.add("hidden");
+          }, 2500);
+        }
+      });
+    });
+  }
+}
+
+// ==================== AUDIT TAB ====================
+const auditRefreshBtn = document.getElementById("audit-refresh-btn");
+const auditList = document.getElementById("audit-list");
+
+function initAuditTab() {
+  if (auditRefreshBtn) {
+    auditRefreshBtn.addEventListener("click", loadAuditHistory);
+  }
+}
+
+async function loadAuditHistory() {
+  if (!auditList) return;
+  auditList.innerHTML = `<p class="muted">Loading audit records...</p>`;
+  try {
+    const res = await fetch(`${BACKEND_BASE}/audit/history?limit=30`);
+    if (!res.ok) {
+      auditList.innerHTML = `<p class="error-text">Failed to fetch audit records (${res.status}). Ensure backend is running.</p>`;
+      return;
+    }
+    const logs = await res.json();
+    if (!logs || logs.length === 0) {
+      auditList.innerHTML = `<p class="muted">No audit logs found in artifacts.</p>`;
+      return;
+    }
+
+    auditList.innerHTML = "";
+    logs.forEach((log) => {
+      const item = document.createElement("div");
+      item.className = "audit-item";
+      item.style.cssText = "padding: 10px; margin-bottom: 8px; background: rgba(255,255,255,0.04); border-radius: 6px; border: 1px solid rgba(255,255,255,0.08); font-size: 12px;";
+
+      const timeStr = log.timestamp ? new Date(log.timestamp).toLocaleString() : "Unknown date";
+      const modalityUpper = (log.modality || "TEXT").toUpperCase();
+
+      item.innerHTML = `
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+          <strong style="color: #60a5fa;">[${modalityUpper}] ${log.source || "Unknown Source"}</strong>
+          <span style="color: #94a3b8; font-size: 11px;">${timeStr}</span>
+        </div>
+        <div style="display: flex; justify-content: space-between; align-items: center; color: #cbd5e1;">
+          <span>Entities detected: <strong>${log.entity_count}</strong> (${log.detection_mode || "regex"})</span>
+          <a href="${BACKEND_BASE}/audit/history/${log.filename}" target="_blank" download="${log.filename}" class="btn-lightbox" style="padding: 2px 8px; font-size: 11px; text-decoration: none; display: inline-block;">JSON</a>
+        </div>
+      `;
+      auditList.appendChild(item);
+    });
+  } catch (err) {
+    auditList.innerHTML = `<p class="error-text">Could not connect to audit history: ${err.message}</p>`;
+  }
 }
 

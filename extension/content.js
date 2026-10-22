@@ -44,6 +44,60 @@ const SITE_ADAPTERS = {
       "textarea",
     ],
   },
+  perplexity: {
+    hosts: ["perplexity.ai", "www.perplexity.ai"],
+    selectors: [
+      'textarea[placeholder*="Ask"]',
+      'textarea[placeholder*="search"]',
+      'div[contenteditable="true"]',
+      "textarea",
+    ],
+  },
+  copilot: {
+    hosts: ["copilot.microsoft.com"],
+    selectors: [
+      "textarea#searchbox",
+      'textarea[placeholder*="Ask"]',
+      'div[contenteditable="true"]',
+      "textarea",
+    ],
+  },
+  huggingchat: {
+    hosts: ["huggingface.co"],
+    selectors: [
+      'textarea[placeholder*="Ask"]',
+      'textarea[placeholder*="message"]',
+      "textarea",
+    ],
+  },
+  poe: {
+    hosts: ["poe.com"],
+    selectors: [
+      'textarea[placeholder*="Talk"]',
+      'textarea[placeholder*="message"]',
+      'div[contenteditable="true"]',
+      "textarea",
+    ],
+  },
+  twitter: {
+    hosts: ["twitter.com", "x.com"],
+    selectors: [
+      'div[data-testid="tweetTextarea_0"]',
+      'div[role="textbox"][contenteditable="true"]',
+      'div[contenteditable="true"]',
+    ],
+  },
+  linkedin: {
+    hosts: ["linkedin.com", "www.linkedin.com"],
+    selectors: [
+      'div.editor-content div[contenteditable="true"]',
+      'div.ql-editor[contenteditable="true"]',
+      'div.msg-form__contenteditable[contenteditable="true"]',
+      'div[role="textbox"][contenteditable="true"]',
+      'div[contenteditable="true"]',
+      "textarea",
+    ],
+  },
 };
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {

@@ -1,5 +1,6 @@
 from __future__ import annotations
-from typing import Dict, List, Tuple
+import re
+from typing import Any, Dict, List, Tuple
 
 try:
     from faker import Faker
@@ -15,8 +16,44 @@ class TextMitigator:
 
     def __init__(self, config: TextConfig) -> None:
         self.config = config
-        self.faker = Faker(config.faker_locale) if Faker else None
+        self._fakers: Dict[str, Any] = {}
+        if Faker:
+            default_loc = config.faker_locale or "en_US"
+            try:
+                self._fakers[default_loc] = Faker(default_loc)
+            except Exception:
+                self._fakers[default_loc] = Faker()
+            self.faker = self._fakers[default_loc]
+        else:
+            self.faker = None
         self._faker_cache: Dict[str, str] = {}
+
+    def _get_faker_for_entity(self, entity: DetectedEntity) -> Any:
+        if not Faker:
+            return None
+        target_locale = entity.metadata.get("locale")
+        if not target_locale:
+            text_str = str(entity.text or "")
+            label_upper = entity.label.upper()
+            if (
+                label_upper in {"AADHAR", "AADHAAR", "PAN", "VOTER_ID", "LICENSE_PLATE"}
+                or text_str.startswith("+91")
+                or any(ind in text_str.lower() for ind in [
+                    "bangalore", "bengaluru", "delhi", "mumbai", "india", "pune",
+                    "karnataka", "hyderabad", "chennai", "kolkata"
+                ])
+                or re.search(r"\b[6-9]\d{9}\b", text_str)
+            ):
+                target_locale = "en_IN"
+            else:
+                target_locale = self.config.faker_locale or "en_US"
+
+        if target_locale not in self._fakers:
+            try:
+                self._fakers[target_locale] = Faker(target_locale)
+            except Exception:
+                self._fakers[target_locale] = self.faker or Faker()
+        return self._fakers[target_locale]
 
     def mitigate(
         self,
@@ -95,77 +132,79 @@ class TextMitigator:
         return self._generate_faker_value(entity)
 
     def _generate_faker_value(self, entity: DetectedEntity) -> str:
-        """Generate a realistic fake value based on the entity label."""
+        """Generate a realistic fake value based on the entity label and dynamically routed locale."""
         label = entity.label.upper()
+        faker = self._get_faker_for_entity(entity) or self.faker
 
         # Try dynamic Faker generation if available
-        if self.faker:
+        if faker:
             try:
                 # Identity & Contact
                 if "PERSON" in label or "NAME" in label:
                     gender = entity.metadata.get("gender")
                     if gender == "male":
-                        return self.faker.name_male()
+                        return faker.name_male()
                     elif gender == "female":
-                        return self.faker.name_female()
-                    return self.faker.name()
+                        return faker.name_female()
+                    return faker.name()
                 if "EMAIL" in label:
-                    return self.faker.email()
+                    return faker.email()
                 if "PHONE" in label or "TELEPHONE" in label:
-                    return self.faker.phone_number()
+                    return faker.phone_number()
                 if "USER_NAME" in label:
-                    return self.faker.user_name()
+                    return faker.user_name()
                 if "PASSWORD" in label:
-                    return self.faker.password()
+                    return faker.password()
                     
                 # Location & Network
                 if "ORG" in label or "COMPANY" in label:
-                    return self.faker.company()
+                    return faker.company()
                 if "GPE" in label or "LOCATION" in label or "CITY" in label:
-                    return self.faker.city()
+                    return faker.city()
                 if "ADDRESS" in label or "STREET" in label:
-                    return self.faker.address().replace("\n", ", ")
-                if "ZIP" in label:
-                    return self.faker.zipcode()
+                    return faker.address().replace("\n", ", ")
+                if "ZIP" in label or "PIN" in label or "POSTCODE" in label:
+                    return faker.postcode() if hasattr(faker, "postcode") else faker.zipcode()
                 if "IP" in label or "IPV4" in label or "IPV6" in label:
-                    return self.faker.ipv4()
+                    return faker.ipv4()
                 if "MAC" in label:
-                    return self.faker.mac_address()
+                    return faker.mac_address()
                 if "URL" in label:
-                    return self.faker.url()
+                    return faker.url()
 
                 # Financial & IDs
                 if "CREDIT" in label or "CARD_NUMBER" in label:
-                    return self.faker.credit_card_number()
+                    return faker.credit_card_number()
                 if "IBAN" in label:
-                    return self.faker.iban()
+                    return faker.iban()
                 if "SWIFT" in label:
-                    return self.faker.swift()
-                if "SSN" in label or "AADHAR" in label:
-                    return self.faker.ssn()
+                    return faker.swift()
+                if "SSN" in label or "AADHAR" in label or "PAN" in label:
+                    return faker.ssn() if hasattr(faker, "ssn") else "4521 8963 1124"
                 if "PASSPORT" in label:
-                    return self.faker.passport_number()
+                    return faker.passport_number() if hasattr(faker, "passport_number") else "A1234567"
                     
                 # Misc
                 if "DATE" in label:
-                    return str(self.faker.date())
+                    return str(faker.date())
                 if "CARDINAL" in label or "NUMBER" in label:
-                    return str(self.faker.random_int(min=100000, max=999999))
+                    return str(faker.random_int(min=100000, max=999999))
                 if "LICENSE" in label:
                     if "PLATE" in label:
-                        return self.faker.license_plate()
+                        return faker.license_plate() if hasattr(faker, "license_plate") else "KA 01 AB 1234"
             except Exception:
                 pass
 
         # Robust realistic fallback pool if faker is missing or raises an exception
+        is_indian = entity.metadata.get("locale") == "en_IN" or "AADHAR" in label or "PAN" in label
         if "PERSON" in label or "NAME" in label:
-            return "Raj"
+            return "Raj Kumar" if is_indian else "John Smith"
         if "EMAIL" in label:
-            return "raj.kumar@example.com"
+            return "raj.kumar@example.in" if is_indian else "john.smith@example.com"
         if "PHONE" in label or "TELEPHONE" in label:
-            return "+91 98765 43210"
+            return "+91 98765 43210" if is_indian else "+1-415-555-0199"
         if "ADDRESS" in label or "STREET" in label:
-            return "123 MG Road, Bengaluru"
+            return "123 MG Road, Bengaluru" if is_indian else "742 Evergreen Terrace, Springfield"
         if "ORG" in label or "COMPANY" in label:
             return "TechCorp Global"
         if "CREDIT" in label or "CARD" in label:

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import re
+import shutil
 from pathlib import Path
 
 from ..adapters import AudioAdapter, VideoAdapter
@@ -21,8 +23,8 @@ class VideoProcessingError(RuntimeError):
 
 
 LOGGER = get_logger(__name__)
-TEXT_EXTENSIONS = {".txt", ".md", ".json"}
-IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp"}
+TEXT_EXTENSIONS = {".txt", ".md", ".json", ".csv", ".log", ".rtf", ".docx", ".pdf"}
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tiff", ".tif"}
 AUDIO_EXTENSIONS = {".wav", ".mp3", ".m4a", ".aac", ".flac", ".ogg", ".opus"}
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"}
 
@@ -53,12 +55,191 @@ class PipelineManager:
     # --- Text Modality -------------------------------------------------
     def process_text(self, path: Path) -> DetectionResult:
         source_path = Path(path)
-        raw_text = source_path.read_text(encoding="utf-8")
+        ext = source_path.suffix.lower()
+        if ext == ".pdf":
+            return self._process_pdf(source_path)
+        if ext == ".docx":
+            return self._process_docx(source_path)
+        if ext == ".csv":
+            return self._process_csv(source_path)
+        if ext == ".rtf":
+            return self._process_rtf(source_path)
+        if ext == ".log":
+            return self._process_log(source_path)
+
+        raw_text = source_path.read_text(encoding="utf-8", errors="replace")
         LOGGER.info("Processing text: %s", source_path.name)
         return self._process_text_payload(
             source_path,
             raw_text,
-            suffix=".sanitized.txt",
+            suffix=f".sanitized{ext}",
+            modality=Modality.TEXT,
+        )
+
+    def _process_pdf(self, source_path: Path) -> DetectionResult:
+        LOGGER.info("Processing PDF: %s", source_path.name)
+        import pypdf
+        reader = pypdf.PdfReader(str(source_path))
+        all_entities: list[DetectedEntity] = []
+        sanitized_pages: list[str] = []
+
+        for idx, page in enumerate(reader.pages):
+            page_text = page.extract_text() or ""
+            if not page_text.strip():
+                sanitized_pages.append("")
+                continue
+            ents = self.text_detector.detect(page_text)
+            all_entities.extend(ents)
+            sanitized, _ = self.text_mitigator.mitigate(page_text, ents)
+            sanitized_pages.append(sanitized)
+
+        output_pdf_path = self._output_path(source_path, suffix=".sanitized.pdf")
+        ensure_dir(output_pdf_path)
+
+        pdf_written = False
+        try:
+            from reportlab.pdfgen import canvas
+            from reportlab.lib.pagesizes import letter
+            c = canvas.Canvas(str(output_pdf_path), pagesize=letter)
+            width, height = letter
+            for page_content in sanitized_pages:
+                y = height - 50
+                for line in page_content.splitlines():
+                    if y < 50:
+                        c.showPage()
+                        y = height - 50
+                    c.drawString(50, y, line[:100])
+                    y -= 14
+                c.showPage()
+            c.save()
+            pdf_written = True
+        except Exception as exc:
+            LOGGER.warning("ReportLab PDF generation fallback: %s", exc)
+
+        txt_dump = output_pdf_path.with_suffix(".sanitized.txt")
+        full_sanitized_text = "\n\n--- Page Break ---\n\n".join(sanitized_pages)
+        txt_dump.write_text(full_sanitized_text, encoding="utf-8")
+
+        artifacts = [txt_dump]
+        if pdf_written and output_pdf_path.exists():
+            artifacts.insert(0, output_pdf_path)
+            mitigated_out = output_pdf_path
+        else:
+            mitigated_out = txt_dump
+
+        result = DetectionResult(
+            source_path=source_path,
+            modality=Modality.TEXT,
+            entities=all_entities,
+            mitigated_output=mitigated_out,
+            artifacts=artifacts,
+            runtime_metadata={"detection_mode": self.text_detector.detection_mode, "pages": len(reader.pages)},
+        )
+        self._attach_audit(result)
+        return result
+
+    def _process_docx(self, source_path: Path) -> DetectionResult:
+        LOGGER.info("Processing DOCX: %s", source_path.name)
+        import docx
+        doc = docx.Document(str(source_path))
+        all_entities: list[DetectedEntity] = []
+
+        for p in doc.paragraphs:
+            if p.text and p.text.strip():
+                ents = self.text_detector.detect(p.text)
+                all_entities.extend(ents)
+                sanitized, _ = self.text_mitigator.mitigate(p.text, ents)
+                p.text = sanitized
+
+        for table in doc.tables:
+            for row in table.rows:
+                for cell in row.cells:
+                    if cell.text and cell.text.strip():
+                        ents = self.text_detector.detect(cell.text)
+                        all_entities.extend(ents)
+                        sanitized, _ = self.text_mitigator.mitigate(cell.text, ents)
+                        cell.text = sanitized
+
+        output_docx_path = self._output_path(source_path, suffix=".sanitized.docx")
+        ensure_dir(output_docx_path)
+        doc.save(str(output_docx_path))
+
+        result = DetectionResult(
+            source_path=source_path,
+            modality=Modality.TEXT,
+            entities=all_entities,
+            mitigated_output=output_docx_path,
+            artifacts=[output_docx_path],
+            runtime_metadata={"detection_mode": self.text_detector.detection_mode},
+        )
+        self._attach_audit(result)
+        return result
+
+    def _process_csv(self, source_path: Path) -> DetectionResult:
+        LOGGER.info("Processing CSV: %s", source_path.name)
+        import csv
+        all_entities: list[DetectedEntity] = []
+        output_csv_path = self._output_path(source_path, suffix=".sanitized.csv")
+        ensure_dir(output_csv_path)
+
+        sanitized_rows = []
+        with open(source_path, "r", encoding="utf-8", errors="replace", newline="") as infile:
+            reader = csv.reader(infile)
+            for row in reader:
+                sanitized_row = []
+                for cell in row:
+                    if cell.strip():
+                        ents = self.text_detector.detect(cell)
+                        all_entities.extend(ents)
+                        sanitized, _ = self.text_mitigator.mitigate(cell, ents)
+                        sanitized_row.append(sanitized)
+                    else:
+                        sanitized_row.append(cell)
+                sanitized_rows.append(sanitized_row)
+
+        with open(output_csv_path, "w", encoding="utf-8", newline="") as outfile:
+            writer = csv.writer(outfile)
+            writer.writerows(sanitized_rows)
+
+        result = DetectionResult(
+            source_path=source_path,
+            modality=Modality.TEXT,
+            entities=all_entities,
+            mitigated_output=output_csv_path,
+            artifacts=[output_csv_path],
+            runtime_metadata={"detection_mode": self.text_detector.detection_mode, "rows": len(sanitized_rows)},
+        )
+        self._attach_audit(result)
+        return result
+
+    def _process_rtf(self, source_path: Path) -> DetectionResult:
+        LOGGER.info("Processing RTF: %s", source_path.name)
+        raw_rtf = source_path.read_text(encoding="utf-8", errors="replace")
+        try:
+            from striprtf.striprtf import rtf_to_text
+            plain_text = rtf_to_text(raw_rtf)
+        except Exception:
+            plain_text = re.sub(r"\\[a-zA-Z0-9]+", " ", raw_rtf)
+            plain_text = re.sub(r"[{}]", "", plain_text)
+
+        return self._process_text_payload(
+            source_path,
+            plain_text,
+            suffix=".sanitized.rtf",
+            modality=Modality.TEXT,
+        )
+
+    def _process_log(self, source_path: Path) -> DetectionResult:
+        LOGGER.info("Processing LOG: %s", source_path.name)
+        try:
+            raw_log = source_path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            raw_log = source_path.read_text(encoding="latin-1", errors="replace")
+
+        return self._process_text_payload(
+            source_path,
+            raw_log,
+            suffix=".sanitized.log",
             modality=Modality.TEXT,
         )
 
@@ -273,6 +454,8 @@ class PipelineManager:
             ensure_dir(output_video_path)
             reconstructed_video = self.video_adapter.reconstruct_video(source_path, processed_frames, output_video_path)
             artifacts.append(reconstructed_video)
+            # Cleanup intermediate frame folder to avoid accumulating thousands of PNGs on disk
+            shutil.rmtree(frame_dir, ignore_errors=True)
 
             result = DetectionResult(
                 source_path=source_path,
@@ -397,29 +580,45 @@ class PipelineManager:
 
     def process_folder(self, folder: Path, recursive: bool = True) -> list[DetectionResult]:
         folder = Path(folder)
-        iterator = folder.rglob("*") if recursive else folder.glob("*")
-        results: list[DetectionResult] = []
-        for path in iterator:
-            if not path.is_file():
-                continue
+        iterator = list(folder.rglob("*") if recursive else folder.glob("*"))
+        files_to_process = [p for p in iterator if p.is_file()]
+
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        def _process_single_file(path: Path) -> DetectionResult | None:
             suffix = path.suffix.lower()
             if suffix in TEXT_EXTENSIONS:
-                results.append(self.process_text(path))
+                return self.process_text(path)
             elif suffix in IMAGE_EXTENSIONS:
                 try:
-                    results.append(self.process_image(path))
+                    return self.process_image(path)
                 except FileNotFoundError:
                     LOGGER.warning("Skipping unreadable image: %s", path)
             elif suffix in AUDIO_EXTENSIONS:
                 try:
-                    results.append(self.process_audio(path))
+                    return self.process_audio(path)
                 except RuntimeError as exc:
                     LOGGER.warning("Skipping audio %s: %s", path, exc)
             elif suffix in VIDEO_EXTENSIONS:
                 try:
-                    results.append(self.process_video(path))
+                    return self.process_video(path)
                 except RuntimeError as exc:
                     LOGGER.warning("Skipping video %s: %s", path, exc)
+            return None
+
+        results: list[DetectionResult] = []
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            future_to_file = {executor.submit(_process_single_file, f): f for f in files_to_process}
+            for future in as_completed(future_to_file):
+                try:
+                    res = future.result()
+                    if res is not None:
+                        results.append(res)
+                except Exception as exc:
+                    file_path = future_to_file[future]
+                    LOGGER.error("Failed processing file %s: %s", file_path, exc)
+
+        results.sort(key=lambda r: str(r.source_path))
         return results
 
     def _attach_audit(self, result: DetectionResult) -> None:

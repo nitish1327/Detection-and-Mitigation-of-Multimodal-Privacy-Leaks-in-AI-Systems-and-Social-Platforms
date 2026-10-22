@@ -672,11 +672,48 @@ def extract_audio(video_path: Path | str, output_wav: Path | str) -> bool:
     return proc.returncode == 0 and output_wav.exists() and output_wav.stat().st_size > 0
 
 
+_PROBED_ENCODER: str | None = None
+
+
+def get_h264_encoder(preferred: str = "auto", ffmpeg_bin: str | None = None) -> str:
+    """Return the best available H.264 video encoder (h264_nvenc, h264_qsv, h264_amf, or fallback libx264)."""
+    global _PROBED_ENCODER
+    if preferred not in {"auto", None, ""}:
+        return preferred
+    if _PROBED_ENCODER is not None:
+        return _PROBED_ENCODER
+
+    ffmpeg = ffmpeg_bin or find_ffmpeg()
+    if not ffmpeg:
+        _PROBED_ENCODER = "libx264"
+        return _PROBED_ENCODER
+
+    for candidate in ["h264_nvenc", "h264_qsv", "h264_amf"]:
+        try:
+            cmd = [
+                ffmpeg, "-y",
+                "-f", "lavfi", "-i", "nullsrc=s=64x64:d=0.05",
+                "-c:v", candidate,
+                "-f", "null", "-"
+            ]
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=1.5)
+            if res.returncode == 0:
+                LOGGER.info("Hardware video encoder active: %s", candidate)
+                _PROBED_ENCODER = candidate
+                return candidate
+        except Exception:
+            pass
+
+    _PROBED_ENCODER = "libx264"
+    return _PROBED_ENCODER
+
+
 def reconstruct_with_audio(
     raw_video: Path,
     source_video: Path,
     output_path: Path,
     sanitized_audio_path: Path | None = None,
+    hw_accel: str = "auto",
 ) -> Path:
     """Transcode raw_video to H.264 and mux audio (sanitized if provided, else source) using ffmpeg."""
     ffmpeg = find_ffmpeg()
@@ -693,13 +730,14 @@ def reconstruct_with_audio(
         if (sanitized_audio_path and Path(sanitized_audio_path).exists())
         else source_video
     )
+    encoder = get_h264_encoder(preferred=hw_accel, ffmpeg_bin=ffmpeg)
     cmd = [
         ffmpeg, "-y",
         "-i", str(raw_video),
         "-i", str(audio_source),
         "-map", "0:v:0",
         "-map", "1:a?",
-        "-c:v", "libx264",
+        "-c:v", encoder,
         "-c:a", "aac",
         "-pix_fmt", "yuv420p",
         "-movflags", "+faststart",

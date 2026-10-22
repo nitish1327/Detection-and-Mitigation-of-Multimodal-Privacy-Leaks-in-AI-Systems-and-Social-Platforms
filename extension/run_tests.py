@@ -118,6 +118,8 @@ def test_ui_tabs() -> None:
     record("Text tab present", 'data-tab="text"' in html and "tab-text" in html)
     record("Image tab present", 'data-tab="image"' in html and "tab-image" in html)
     record("Video tab present", 'data-tab="video"' in html and "tab-video" in html)
+    record("Policy tab present", 'data-tab="policy"' in html and "tab-policy" in html)
+    record("Audit tab present", 'data-tab="audit"' in html and "tab-audit" in html)
     record("Image upload control", 'id="image-input"' in html and 'type="file"' in html)
     record("Video upload control", 'id="video-input"' in html and 'type="file"' in html)
     record("Video face selector wired", "renderFaceGrid" in js and "video-face-grid" in html)
@@ -221,6 +223,12 @@ def test_injection_adapters() -> None:
     record("ChatGPT adapter", "chat.openai.com" in content_js and "chatgpt.com" in content_js)
     record("Gemini adapter", "gemini.google.com" in content_js)
     record("Claude adapter", "claude.ai" in content_js)
+    record("Perplexity adapter", "perplexity.ai" in content_js)
+    record("Copilot adapter", "copilot.microsoft.com" in content_js)
+    record("HuggingChat adapter", "huggingface.co" in content_js)
+    record("Poe adapter", "poe.com" in content_js)
+    record("Twitter/X adapter", "twitter.com" in content_js and "x.com" in content_js)
+    record("LinkedIn adapter", "linkedin.com" in content_js)
     record(
         "Injection message handler",
         "INJECT_SANITIZED_TEXT" in content_js and "injectSanitizedText" in content_js,

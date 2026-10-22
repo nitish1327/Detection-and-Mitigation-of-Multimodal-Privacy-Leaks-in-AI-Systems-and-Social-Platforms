@@ -79,20 +79,71 @@ class AudioMitigator:
         samples = array("h")
         samples.frombytes(raw_frames)
 
-        # Convert entity-aligned time windows into sample indices and paint a tone.
+        mask_style = getattr(self.config, "mask_style", "beep").lower()
+        amplitude = self.config.beep_amplitude
+        import random
+
+        # Pink noise state variables if needed
+        b0, b1, b2, b3, b4, b5, b6 = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+
+        # Convert entity-aligned time windows into sample indices and paint audio masking.
         for window in time_ranges:
             window["ffmpeg_fallback"] = fallback_used
             start_index = max(0, int(window["start_sec"] * frame_rate))
             end_index = min(frame_count, int(window["end_sec"] * frame_rate))
             for frame_idx in range(start_index, end_index):
-                tone_value = int(
-                    32767
-                    * self.config.beep_amplitude
-                    * math.sin(2.0 * math.pi * self.config.beep_frequency_hz * (frame_idx / frame_rate))
-                )
+                t = (frame_idx / frame_rate) if frame_rate else 0.0
+                if mask_style == "silence":
+                    tone_value = 0
+                elif mask_style == "white_noise":
+                    tone_value = int(random.uniform(-1.0, 1.0) * 32767 * amplitude)
+                elif mask_style == "pink_noise":
+                    white = random.uniform(-1.0, 1.0)
+                    b0 = 0.99886 * b0 + white * 0.0555179
+                    b1 = 0.99332 * b1 + white * 0.0750759
+                    b2 = 0.96900 * b2 + white * 0.1538520
+                    b3 = 0.86650 * b3 + white * 0.3104856
+                    b4 = 0.55000 * b4 + white * 0.5329522
+                    b5 = -0.7616 * b5 - white * 0.0168980
+                    pink = b0 + b1 + b2 + b3 + b4 + b5 + b6 + white * 0.5362
+                    b6 = white * 0.115926
+                    tone_value = int(max(-32767, min(32767, pink * 0.2 * 32767 * amplitude)))
+                elif mask_style == "garble":
+                    mod = math.sin(2.0 * math.pi * 5.0 * t)
+                    carrier = math.sin(2.0 * math.pi * (250.0 + 180.0 * mod) * t)
+                    base = frame_idx * channels
+                    orig = samples[base] if base < len(samples) else 0
+                    tone_value = int(max(-32767, min(32767, (orig * 0.3) + (carrier * 32767 * amplitude * 0.6))))
+                else:  # default "beep"
+                    tone_value = int(
+                        32767
+                        * amplitude
+                        * math.sin(2.0 * math.pi * self.config.beep_frequency_hz * t)
+                    )
                 base = frame_idx * channels
                 for ch in range(channels):
                     samples[base + ch] = tone_value
+
+        target_ext = output_path.suffix.lower()
+        if target_ext in {".mp3", ".m4a", ".aac", ".ogg", ".webm"}:
+            wav_temp = output_path.with_suffix(".tmp.wav")
+            with wave.open(str(wav_temp), "wb") as out_wav:
+                out_wav.setnchannels(channels)
+                out_wav.setsampwidth(sample_width)
+                out_wav.setframerate(frame_rate)
+                out_wav.writeframes(samples.tobytes())
+
+            ffmpeg = shutil.which(self.config.ffmpeg_binary) or self._bundled_ffmpeg()
+            if ffmpeg:
+                cmd = [ffmpeg, "-y", "-i", str(wav_temp), str(output_path)]
+                res = subprocess.run(cmd, capture_output=True, text=True)
+                wav_temp.unlink(missing_ok=True)
+                if res.returncode == 0:
+                    if cleanup_path is not None:
+                        with suppress(FileNotFoundError):
+                            cleanup_path.unlink()
+                    return output_path, time_ranges
+            wav_temp.unlink(missing_ok=True)
 
         with wave.open(str(output_path), "wb") as out_wav:
             out_wav.setnchannels(channels)

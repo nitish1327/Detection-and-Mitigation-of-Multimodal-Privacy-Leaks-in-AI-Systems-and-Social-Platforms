@@ -45,6 +45,12 @@
       <button id="tab-btn-video" class="tab" type="button" role="tab" aria-selected="false" data-tab="video">
         Video
       </button>
+      <button id="tab-btn-policy" class="tab" type="button" role="tab" aria-selected="false" data-tab="policy">
+        Policy
+      </button>
+      <button id="tab-btn-audit" class="tab" type="button" role="tab" aria-selected="false" data-tab="audit">
+        Audit
+      </button>
     </nav>
 
     <section id="error-panel" class="error-panel hidden" role="alert"></section>
@@ -351,6 +357,60 @@
           <button id="video-download-btn" type="button" class="btn btn-accent" disabled>
             Download Sanitized Video
           </button>
+        </div>
+      </section>
+    </div>
+
+    <!-- ==================== POLICY TAB ==================== -->
+    <div id="tab-policy" class="tab-panel" role="tabpanel">
+      <section class="panel">
+        <h2 class="section-title">In-Extension Policy Configuration</h2>
+        <p class="muted">Customize allowlists, custom regex rules, blur parameters, and audio masking styles.</p>
+
+        <div class="form-group" style="margin-top: 12px;">
+          <label for="policy-allowlist" class="label">Allowlisted Terms (one per line)</label>
+          <textarea id="policy-allowlist" rows="3" placeholder="e.g. AcmeCorp&#10;InternalDemo"></textarea>
+        </div>
+
+        <div class="form-group" style="margin-top: 12px;">
+          <label for="policy-regex" class="label">Custom Regex Patterns (one per line)</label>
+          <textarea id="policy-regex" rows="3" placeholder="e.g. [A-Z]{3}-\d{4}"></textarea>
+        </div>
+
+        <div class="form-group" style="margin-top: 12px;">
+          <label for="policy-blur-strength" class="label">Face Blur Strength (<span id="blur-strength-val">51</span>px)</label>
+          <input type="range" id="policy-blur-strength" min="15" max="151" step="2" value="51" style="width: 100%;" />
+        </div>
+
+        <div class="form-group" style="margin-top: 12px;">
+          <label for="policy-audio-mask" class="label">Audio Masking Strategy</label>
+          <select id="policy-audio-mask" class="select-input" style="width: 100%; padding: 8px; border-radius: 6px; background: #1e1e2e; color: #fff; border: 1px solid #3e3e5e;">
+            <option value="beep">1000 Hz Beep Tone</option>
+            <option value="silence">Zero-Amplitude Silence</option>
+            <option value="white_noise">White Noise Masking</option>
+            <option value="pink_noise">Pink (1/f) Noise Masking</option>
+            <option value="garble">Voice Pitch Garble &amp; Distortion</option>
+          </select>
+        </div>
+
+        <div class="actions" style="margin-top: 16px;">
+          <button id="policy-save-btn" type="button" class="btn btn-primary">Save Policy</button>
+          <button id="policy-reset-btn" type="button" class="btn btn-secondary">Reset to Defaults</button>
+        </div>
+        <p id="policy-status-msg" class="muted hidden" style="margin-top: 8px; color: #4ade80;">Settings saved successfully!</p>
+      </section>
+    </div>
+
+    <!-- ==================== AUDIT TAB ==================== -->
+    <div id="tab-audit" class="tab-panel" role="tabpanel">
+      <section class="panel">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <h2 class="section-title">Audit Log History</h2>
+          <button id="audit-refresh-btn" type="button" class="btn btn-secondary" style="padding: 4px 10px; font-size: 12px;">Refresh</button>
+        </div>
+        <p class="muted">Inspect and download local inspection audit records (.audit.json).</p>
+        <div id="audit-list" class="audit-list" style="margin-top: 12px; max-height: 380px; overflow-y: auto;">
+          <p id="audit-empty" class="muted">Loading audit logs...</p>
         </div>
       </section>
     </div>

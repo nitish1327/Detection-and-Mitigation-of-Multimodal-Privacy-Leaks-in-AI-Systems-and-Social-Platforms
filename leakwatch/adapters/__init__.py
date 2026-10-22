@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Callable, List, Mapping
 
 import cv2
+import numpy as np
 
 from ..utils.logging import ensure_dir, get_logger
 
@@ -357,11 +358,14 @@ class VideoAdapter:
 			capture.set(cv2.CAP_PROP_POS_FRAMES, 0)
 
 		replacements: dict[int, Any] = {}
-		for frame_index, frame_path in processed_frames.items():
-			frame = cv2.imread(str(frame_path))
+		for frame_index, frame_item in processed_frames.items():
+			if isinstance(frame_item, np.ndarray):
+				frame = frame_item
+			else:
+				frame = cv2.imread(str(frame_item))
 			if frame is None:
 				capture.release()
-				raise RuntimeError(f"Unable to read processed video frame: {frame_path}")
+				raise RuntimeError(f"Unable to read processed video frame: {frame_item}")
 			if frame.shape[0] != height or frame.shape[1] != width:
 				frame = cv2.resize(frame, (width, height))
 			replacements[frame_index] = frame
@@ -429,6 +433,9 @@ class VideoAdapter:
 			input_path.unlink(missing_ok=True)
 			raise RuntimeError("ffmpeg is required to preserve video audio and container timing")
 
+		from ..video.tracker import get_h264_encoder
+		encoder = get_h264_encoder(ffmpeg_bin=ffmpeg_binary)
+
 		command = [
 			ffmpeg_binary,
 			"-y",
@@ -441,7 +448,7 @@ class VideoAdapter:
 			"-map",
 			"1:a?",
 			"-c:v",
-			"libx264",
+			encoder,
 			"-c:a",
 			"aac",
 			"-pix_fmt",

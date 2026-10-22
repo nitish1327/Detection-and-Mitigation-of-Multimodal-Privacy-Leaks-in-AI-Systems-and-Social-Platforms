@@ -39,7 +39,7 @@ class DetectedEntity(BaseModel):
     mitigation: Literal["mask", "blur", "replace", "none"] = "none"
     explanation: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
-    detection_method: Literal["regex", "nlp", "heuristic", "unknown"] = "unknown"
+    detection_method: Literal["regex", "nlp", "heuristic", "pattern", "unknown"] = "unknown"
 
 
 class DetectionResult(BaseModel):

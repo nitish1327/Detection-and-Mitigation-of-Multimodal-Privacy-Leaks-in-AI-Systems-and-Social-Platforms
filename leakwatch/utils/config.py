@@ -42,6 +42,9 @@ class ImageConfig(BaseModel):
     enable_qr: bool = True
     enable_layout: bool = True
     enable_mrz: bool = True
+    enable_license_plate: bool = True
+    enable_signature_stamp: bool = True
+    enable_barcode: bool = True
     padding_percent: float = 0.05
     default_style: str = "synthetic"  # options: blur, pixelate, redact, synthetic
     strip_metadata: bool = True
@@ -73,6 +76,7 @@ class VideoConfig(ModalityToggle):
     carryover_frames: int = 10
     frame_stride: int = 1
     max_frames: int | None = None
+    hw_accel: str = "auto"  # options: auto, nvenc, qsv, amf, libx264
 
 
 class AudioConfig(ModalityToggle):
@@ -87,6 +91,8 @@ class AudioConfig(ModalityToggle):
     padding_ms: int = 150
     merge_gap_ms: int = 300
     mapping_confidence_threshold: float = 0.5
+    mask_style: str = "beep"  # beep, silence, white_noise, pink_noise, garble
+    output_format: str = "wav"  # wav, mp3, m4a, ogg, webm
 
 
 class AppConfig(BaseModel):

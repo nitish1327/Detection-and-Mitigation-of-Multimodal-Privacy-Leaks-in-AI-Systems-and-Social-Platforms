@@ -71,15 +71,27 @@ class ImageMitigator:
         if original is None:
             return path, []
 
+        if output_path is None:
+            output_path = path.with_name(f"{path.stem}.sanitized{path.suffix}")
+
+        sanitized_frame, updated_entities = self.mitigate_frame(original, entities)
+        cv2.imwrite(str(output_path), sanitized_frame)
+        return output_path, updated_entities
+
+    def mitigate_frame(
+        self,
+        original: np.ndarray,
+        entities: List[DetectedEntity],
+    ) -> Tuple[np.ndarray, List[DetectedEntity]]:
+        if original is None or original.size == 0:
+            return original, []
+
         height, width = original.shape[:2]
 
         if self.config.only_mitigated_info:
             image = np.zeros((height, width, 3), dtype=np.uint8) + 30
         else:
             image = original.copy()
-
-        if output_path is None:
-            output_path = path.with_name(f"{path.stem}.sanitized{path.suffix}")
 
         updated_entities: list[DetectedEntity] = []
         image_identity_asset = None
@@ -271,8 +283,7 @@ class ImageMitigator:
                 )
             )
 
-        cv2.imwrite(str(output_path), image)
-        return output_path, updated_entities
+        return image, updated_entities
 
     # ------------------------------------------------------------------
     # 1. QR CODE – size-adaptive multi-pass Gaussian blur
@@ -849,13 +860,61 @@ class ImageMitigator:
             thickness = max(1, int(font_scale * 1.0))
             text_size = cv2.getTextSize(fake_text, font, font_scale, thickness)[0]
 
-        # ---- Step 5: Center text vertically, left-align horizontally ----
-        text_y = (h + text_size[1]) // 2
-        text_x = max(2, (w - text_size[0]) // 2)  # center horizontally
+        # ---- Step 5: Render text with anti-aliased TrueType font via Pillow ----
+        rendered_with_pil = False
+        try:
+            from PIL import Image as PILImage, ImageDraw as PILImageDraw, ImageFont as PILImageFont
+            target_pt = max(9, int(h * 0.72))
+            font_candidates = [
+                "arial.ttf", "segoeui.ttf", "calibri.ttf", "tahoma.ttf", "DejaVuSans.ttf",
+                "C:/Windows/Fonts/arial.ttf", "C:/Windows/Fonts/segoeui.ttf",
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+            ]
+            pil_font = None
+            for fc in font_candidates:
+                try:
+                    pil_font = PILImageFont.truetype(fc, target_pt)
+                    break
+                except Exception:
+                    continue
+            if pil_font is None:
+                pil_font = PILImageFont.load_default()
 
-        # Draw text directly on the inpainted (erased) image
-        cv2.putText(erased, fake_text, (text_x, text_y), font,
-                    font_scale, text_color, thickness, cv2.LINE_AA)
+            if pil_font:
+                bbox_text = pil_font.getbbox(fake_text)
+                tw = bbox_text[2] - bbox_text[0]
+                th = bbox_text[3] - bbox_text[1]
+                if tw > target_w and target_w > 0:
+                    scale_factor = target_w / float(tw)
+                    new_pt = max(8, int(target_pt * scale_factor))
+                    for fc in font_candidates:
+                        try:
+                            pil_font = PILImageFont.truetype(fc, new_pt)
+                            break
+                        except Exception:
+                            continue
+                    bbox_text = pil_font.getbbox(fake_text)
+                    tw = bbox_text[2] - bbox_text[0]
+                    th = bbox_text[3] - bbox_text[1]
+
+                tx = max(2, (w - tw) // 2)
+                ty = max(0, (h - th) // 2 - bbox_text[1])
+
+                pil_img = PILImage.fromarray(cv2.cvtColor(erased, cv2.COLOR_BGR2RGB))
+                draw = PILImageDraw.Draw(pil_img)
+                rgb_color = (int(text_color[2]), int(text_color[1]), int(text_color[0]))
+                draw.text((tx, ty), fake_text, fill=rgb_color, font=pil_font)
+                erased = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+                rendered_with_pil = True
+        except Exception as exc:
+            LOGGER.debug("Pillow font rendering fallback: %s", exc)
+            rendered_with_pil = False
+
+        if not rendered_with_pil:
+            text_y = (h + text_size[1]) // 2
+            text_x = max(2, (w - text_size[0]) // 2)
+            cv2.putText(erased, fake_text, (text_x, text_y), font,
+                        font_scale, text_color, thickness, cv2.LINE_AA)
 
         # ---- Step 6: Add subtle noise to match document texture ----
         noise = np.random.normal(0, 1.5, erased.shape).astype(np.float32)

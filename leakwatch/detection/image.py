@@ -118,6 +118,12 @@ class ImageDetector:
         self._text_detector = text_detector
 
         self._qr_detector = cv2.QRCodeDetector()
+        self._barcode_detector = None
+        if hasattr(cv2, "barcode") and hasattr(cv2.barcode, "BarcodeDetector"):
+            try:
+                self._barcode_detector = cv2.barcode.BarcodeDetector()
+            except Exception:
+                self._barcode_detector = None
 
         # OpenCV 5 YuNet face detector
         self._model_path = Path(__file__).resolve().parent.parent / "utils" / "assets" / "face_detection_yunet_2023mar.onnx"
@@ -199,6 +205,21 @@ class ImageDetector:
                 
         entities.extend(self._detect_id_card_by_color(image))
         entities.extend(self._detect_text_multirotation(image))
+
+        # Barcode Detection (1D and 2D barcodes)
+        if getattr(self.config, "enable_barcode", True):
+            entities.extend(self._detect_barcodes(image))
+
+        # License Plate Detection
+        if getattr(self.config, "enable_license_plate", True):
+            ocr_res = ocr_results if self.config.enable_ocr else None
+            entities.extend(self._detect_license_plates(image, ocr_results=ocr_res))
+
+        # Signature & Stamp Detection
+        if getattr(self.config, "enable_signature_stamp", True):
+            ocr_res = ocr_results if self.config.enable_ocr else None
+            entities.extend(self._detect_signatures_and_stamps(image, ocr_results=ocr_res))
+
         return entities
 
     # --- ID Card Detection via Color Segmentation -------------------------
@@ -733,3 +754,190 @@ class ImageDetector:
         area1 = box1.width * box1.height
         area2 = box2.width * box2.height
         return intersection / min(area1, area2) > 0.3
+
+    def _detect_barcodes(self, image: np.ndarray) -> list[DetectedEntity]:
+        """Detect 1D barcodes and 2D barcodes/data matrices."""
+        results: list[DetectedEntity] = []
+        img_h, img_w = image.shape[:2]
+
+        if hasattr(self, "_barcode_detector") and self._barcode_detector is not None:
+            try:
+                retval, decoded_info, decoded_type, points = self._barcode_detector.detectAndDecode(image)
+                if retval and points is not None:
+                    for i, poly in enumerate(points):
+                        pts = poly.astype(np.int32)
+                        x, y, w, h = cv2.boundingRect(pts)
+                        if w > 10 and h > 10:
+                            b_text = decoded_info[i] if i < len(decoded_info) else ""
+                            b_type = decoded_type[i] if i < len(decoded_type) else "barcode"
+                            results.append(
+                                DetectedEntity(
+                                    modality=Modality.IMAGE,
+                                    label="BARCODE",
+                                    text=b_text or b_type,
+                                    confidence=0.95,
+                                    bbox=BoundingBox(x=x, y=y, width=w, height=h),
+                                    detection_method="cv",
+                                    mitigation="mask",
+                                )
+                            )
+            except Exception as exc:
+                LOGGER.debug("OpenCV barcode detector failed: %s", exc)
+
+        # Fallback 1D barcode gradient pattern detection
+        try:
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            gradX = cv2.Sobel(gray, ddepth=cv2.CV_32F, dx=1, dy=0, ksize=-1)
+            gradY = cv2.Sobel(gray, ddepth=cv2.CV_32F, dx=0, dy=1, ksize=-1)
+            gradient = cv2.subtract(gradX, gradY)
+            gradient = cv2.convertScaleAbs(gradient)
+            blurred = cv2.blur(gradient, (9, 9))
+            _, thresh = cv2.threshold(blurred, 220, 255, cv2.THRESH_BINARY)
+            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (21, 7))
+            closed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+            closed = cv2.erode(closed, None, iterations=4)
+            closed = cv2.dilate(closed, None, iterations=4)
+            contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            for c in contours:
+                x, y, w, h = cv2.boundingRect(c)
+                aspect = w / float(h) if h > 0 else 0
+                area = w * h
+                if 1.5 <= aspect <= 7.0 and (img_w * img_h * 0.005) <= area <= (img_w * img_h * 0.25):
+                    if not any(abs(e.bbox.x - x) < 20 and abs(e.bbox.y - y) < 20 for e in results if e.bbox):
+                        results.append(
+                            DetectedEntity(
+                                modality=Modality.IMAGE,
+                                label="BARCODE",
+                                text="BARCODE_1D",
+                                confidence=0.80,
+                                bbox=BoundingBox(x=x, y=y, width=w, height=h),
+                                detection_method="heuristic",
+                                mitigation="mask",
+                            )
+                        )
+        except Exception as exc:
+            LOGGER.debug("1D barcode gradient detection error: %s", exc)
+
+        return results
+
+    def _detect_license_plates(self, image: np.ndarray, ocr_results: list | None = None) -> list[DetectedEntity]:
+        """Detect vehicle license plates using regex on OCR and visual aspect ratio/edge profiling."""
+        results: list[DetectedEntity] = []
+        img_h, img_w = image.shape[:2]
+        img_area = img_h * img_w
+
+        if ocr_results:
+            plate_re = re.compile(r"\b[A-Z]{2}[-\s]?[0-9]{1,2}[-\s]?[A-Z]{1,3}[-\s]?[0-9]{3,4}\b", re.IGNORECASE)
+            for bbox_poly, text, conf in ocr_results:
+                if plate_re.search(text):
+                    pts = np.array(bbox_poly, dtype=np.int32)
+                    x, y, w, h = cv2.boundingRect(pts)
+                    results.append(
+                        DetectedEntity(
+                            modality=Modality.IMAGE,
+                            label="LICENSE_PLATE",
+                            text=text,
+                            confidence=float(conf),
+                            bbox=BoundingBox(x=x, y=y, width=w, height=h),
+                            detection_method="pattern",
+                            mitigation="mask",
+                        )
+                    )
+
+        try:
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            sobel = cv2.Sobel(gray, cv2.CV_8U, 1, 0, ksize=3)
+            _, thresh = cv2.threshold(sobel, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            element = cv2.getStructuringElement(cv2.MORPH_RECT, (17, 3))
+            morph = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, element)
+            contours, _ = cv2.findContours(morph, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+            for c in contours:
+                x, y, w, h = cv2.boundingRect(c)
+                aspect = w / float(h) if h > 0 else 0
+                area = w * h
+                if 2.2 <= aspect <= 5.5 and (img_area * 0.003) <= area <= (img_area * 0.15):
+                    roi_thresh = thresh[y:y+h, x:x+w]
+                    white_ratio = cv2.countNonZero(roi_thresh) / float(area) if area > 0 else 0
+                    if 0.15 <= white_ratio <= 0.65:
+                        if not any(abs(e.bbox.x - x) < 20 and abs(e.bbox.y - y) < 20 for e in results if e.bbox):
+                            results.append(
+                                DetectedEntity(
+                                    modality=Modality.IMAGE,
+                                    label="LICENSE_PLATE",
+                                    text="VEHICLE_PLATE",
+                                    confidence=0.75,
+                                    bbox=BoundingBox(x=x, y=y, width=w, height=h),
+                                    detection_method="heuristic",
+                                    mitigation="mask",
+                                )
+                            )
+        except Exception as exc:
+            LOGGER.debug("License plate visual contour error: %s", exc)
+
+        return results
+
+    def _detect_signatures_and_stamps(self, image: np.ndarray, ocr_results: list | None = None) -> list[DetectedEntity]:
+        """Detect handwritten ink signatures and official stamps using HSV ink segmentation."""
+        results: list[DetectedEntity] = []
+        img_h, img_w = image.shape[:2]
+        img_area = img_h * img_w
+
+        # OCR signature labels
+        if ocr_results:
+            sig_re = re.compile(r"\b(signature|signed|signatory|specimen\s+sign)\b", re.IGNORECASE)
+            for bbox_poly, text, conf in ocr_results:
+                if sig_re.search(text):
+                    pts = np.array(bbox_poly, dtype=np.int32)
+                    x, y, w, h = cv2.boundingRect(pts)
+                    # Expand signature zone below or around label
+                    sig_y = min(img_h - 1, y + h)
+                    sig_h = min(img_h - sig_y, int(h * 2.5))
+                    sig_w = min(img_w - x, int(w * 1.5))
+                    if sig_h > 10 and sig_w > 20:
+                        results.append(
+                            DetectedEntity(
+                                modality=Modality.IMAGE,
+                                label="SIGNATURE",
+                                text="SIGNATURE_FIELD",
+                                confidence=float(conf),
+                                bbox=BoundingBox(x=x, y=sig_y, width=sig_w, height=sig_h),
+                                detection_method="pattern",
+                                mitigation="mask",
+                            )
+                        )
+
+        # Ink color segmentation (blue, violet, red ink)
+        try:
+            hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+            mask_blue = cv2.inRange(hsv, np.array([95, 50, 50]), np.array([135, 255, 240]))
+            mask_purple = cv2.inRange(hsv, np.array([135, 50, 50]), np.array([165, 255, 240]))
+            mask_red1 = cv2.inRange(hsv, np.array([0, 70, 50]), np.array([10, 255, 240]))
+            mask_red2 = cv2.inRange(hsv, np.array([170, 70, 50]), np.array([180, 255, 240]))
+            mask_ink = mask_blue | mask_purple | mask_red1 | mask_red2
+
+            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+            mask_ink = cv2.morphologyEx(mask_ink, cv2.MORPH_CLOSE, kernel, iterations=2)
+            contours, _ = cv2.findContours(mask_ink, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            for c in contours:
+                x, y, w, h = cv2.boundingRect(c)
+                area = w * h
+                if (img_area * 0.0005) <= area <= (img_area * 0.12) and w >= 15 and h >= 10:
+                    aspect = w / float(h) if h > 0 else 0
+                    is_stamp = (0.7 <= aspect <= 1.5) and (cv2.contourArea(c) / float(area) > 0.35)
+                    label = "STAMP" if is_stamp else "SIGNATURE"
+                    if not any(abs(e.bbox.x - x) < 15 and abs(e.bbox.y - y) < 15 for e in results if e.bbox):
+                        results.append(
+                            DetectedEntity(
+                                modality=Modality.IMAGE,
+                                label=label,
+                                text=label,
+                                confidence=0.82,
+                                bbox=BoundingBox(x=x, y=y, width=w, height=h),
+                                detection_method="heuristic",
+                                mitigation="mask",
+                            )
+                        )
+        except Exception as exc:
+            LOGGER.debug("Ink stamp/signature detection error: %s", exc)
+
+        return results
