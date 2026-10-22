@@ -19,6 +19,31 @@ from ..utils.types import DetectedEntity, Modality, Span
 
 LOGGER = get_logger(__name__)
 
+# Common non-person words that can follow conversational introductions (e.g., "i am ready")
+NON_PERSON_INTRO_WORDS = {
+    "here", "there", "back", "done", "fine", "good", "sorry", "happy", "writing",
+    "looking", "working", "interested", "sure", "not", "also", "just", "now",
+    "available", "using", "online", "testing", "trying", "ready", "new", "glad",
+    "home", "away", "busy", "well", "okay", "ok", "pleased", "excited", "proud"
+}
+
+# Known given names commonly misclassified as GPE or missed by Western NLP models
+FEMALE_GIVEN_NAMES = {
+    "ananya", "sonika", "priya", "sneha", "aditi", "neha", "pooja", "anjali",
+    "kavita", "meera", "swati", "divya", "tanvi", "riya", "shruti", "shreya",
+    "anushka", "diya", "radha", "simran", "kriti", "nidhi", "pallavi", "rashmi",
+    "bhavna", "rekha", "geetha", "lakshmi", "anu", "gowri", "tanu", "varsha"
+}
+
+MALE_GIVEN_NAMES = {
+    "pranav", "nitish", "rahul", "aarav", "rohit", "amit", "deepak", "vikram",
+    "suresh", "ramesh", "manish", "sunil", "raj", "arjun", "varun", "karan",
+    "ishaan", "krishna", "madhav", "sai", "sanjay", "vijay", "ajay", "alok",
+    "ashok", "vinay", "harsh", "ayush", "kartik", "chirag", "rohan"
+}
+
+KNOWN_GIVEN_NAMES = FEMALE_GIVEN_NAMES | MALE_GIVEN_NAMES
+
 
 @dataclass
 class _RegexPattern:
@@ -172,6 +197,67 @@ class TextDetector:
             )
         ]
 
+        # 1. Reclassify entities tagged as GPE/ORG/MISC that are known given names to PERSON
+        for ent in filtered_entities:
+            clean_token = ent.text.strip().lower()
+            if clean_token in KNOWN_GIVEN_NAMES and ent.label.upper() in {"GPE", "ORG", "MISC", "NORP"}:
+                ent.label = "PERSON"
+
+        # 2. Reclassify or detect names from conversational self-introductions:
+        # e.g., "hello i am ananya", "my name is ananya", "this is pranav", "call me sonika"
+        intro_regex = re.compile(
+            r"\b(?:i\s+am|i'm|im|my\s+name\s+is|myself|this\s+is|call\s+me)\s+([A-Za-z][A-Za-z'\-]{1,25})\b",
+            re.IGNORECASE,
+        )
+        for match in intro_regex.finditer(text):
+            candidate = match.group(1)
+            cand_lower = candidate.lower()
+            if cand_lower in NON_PERSON_INTRO_WORDS or self._is_field_label(cand_lower):
+                continue
+            cand_start = match.start(1)
+            cand_end = match.end(1)
+
+            matched_ent = None
+            for ent in filtered_entities:
+                if ent.span and not (ent.span.end <= cand_start or ent.span.start >= cand_end):
+                    matched_ent = ent
+                    break
+
+            if matched_ent:
+                if matched_ent.label.upper() in {"GPE", "ORG", "MISC", "NORP"}:
+                    matched_ent.label = "PERSON"
+            else:
+                filtered_entities.append(
+                    DetectedEntity(
+                        modality=Modality.TEXT,
+                        label="PERSON",
+                        confidence=0.85,
+                        text=candidate,
+                        span=Span(start=cand_start, end=cand_end),
+                        detection_method="pattern",
+                    )
+                )
+
+        # 3. Catch standalone known given names not yet covered by an entity span
+        for name in KNOWN_GIVEN_NAMES:
+            for m in re.finditer(rf"\b({re.escape(name)})\b", text, re.IGNORECASE):
+                n_start, n_end = m.start(1), m.end(1)
+                is_covered = any(
+                    ent.span and not (ent.span.end <= n_start or ent.span.start >= n_end)
+                    for ent in filtered_entities
+                )
+                if not is_covered:
+                    filtered_entities.append(
+                        DetectedEntity(
+                            modality=Modality.TEXT,
+                            label="PERSON",
+                            confidence=0.85,
+                            text=m.group(1),
+                            span=Span(start=n_start, end=n_end),
+                            detection_method="pattern",
+                        )
+                    )
+
         # Primitive document-level gender detection for name replacement
         text_lower = text.lower()
         male_score = sum(text_lower.count(w) for w in [" he ", " his ", " him ", " male "])
@@ -183,9 +269,15 @@ class TextDetector:
         elif female_score > male_score and female_score > 0:
             doc_gender = "female"
 
-        if doc_gender:
-            for ent in filtered_entities:
-                if ent.label in {"PERSON", "NAME"}:
+        # Apply gender metadata (specific name gender takes precedence over document context)
+        for ent in filtered_entities:
+            if ent.label in {"PERSON", "NAME"}:
+                token_lower = ent.text.strip().lower()
+                if token_lower in FEMALE_GIVEN_NAMES:
+                    ent.metadata["gender"] = "female"
+                elif token_lower in MALE_GIVEN_NAMES:
+                    ent.metadata["gender"] = "male"
+                elif doc_gender:
                     ent.metadata["gender"] = doc_gender
 
         return filtered_entities
