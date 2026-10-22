@@ -1260,9 +1260,9 @@ async function handleToggleAudioRecording() {
   clearError();
   if (isRecordingAudio) {
     stopAudioRecording();
-  } else {
-    openMicrophonePermissionPage();
+    return;
   }
+  await startAudioRecording();
 }
 
 function openMicrophonePermissionPage() {
@@ -1287,6 +1287,10 @@ async function startAudioRecording() {
     audioRecordStream = await navigator.mediaDevices.getUserMedia({ audio: true });
   } catch (err) {
     releaseAudioRecordStream();
+    if (err?.name === "NotAllowedError" || err?.name === "PermissionDeniedError") {
+      openMicrophonePermissionPage();
+      return;
+    }
     showError(getAudioRecordingErrorMessage(err));
     return;
   }

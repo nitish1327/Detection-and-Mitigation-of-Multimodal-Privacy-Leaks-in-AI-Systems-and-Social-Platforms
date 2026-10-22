@@ -17,18 +17,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message?.type === "MIC_PERMISSION_RESULT") {
-    const expectedPermissionUrl = chrome.runtime.getURL("permission.html");
-    if (_sender.url !== expectedPermissionUrl || !_sender.tab?.id) {
-      sendResponse({ ok: false });
-      return false;
+    if (_sender.tab?.id) {
+      chrome.tabs.remove(_sender.tab.id).catch(() => undefined);
     }
-
     chrome.runtime.sendMessage({
       type: "MIC_PERMISSION_COMPLETED",
       granted: Boolean(message.granted),
-    }).catch(() => undefined).then(() => chrome.tabs.remove(_sender.tab.id))
-      .then(() => sendResponse({ ok: true }))
-      .catch(() => sendResponse({ ok: false }));
+    }).catch(() => undefined);
+    sendResponse({ ok: true });
     return true;
   }
   return false;

@@ -3,10 +3,69 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Microphone Access</title>
+    <title>Microphone Access - Privacy Sandbox</title>
+    <style>
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        background: #0d1117;
+        color: #c9d1d9;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 100vh;
+        margin: 0;
+        text-align: center;
+      }
+      .card {
+        background: #161b22;
+        border: 1px solid #30363d;
+        border-radius: 12px;
+        padding: 36px 28px;
+        max-width: 440px;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+      }
+      .icon {
+        font-size: 40px;
+        margin-bottom: 12px;
+      }
+      h1 {
+        font-size: 20px;
+        color: #58a6ff;
+        margin: 0 0 12px;
+      }
+      p {
+        font-size: 14px;
+        line-height: 1.6;
+        color: #8b949e;
+        margin: 0 0 20px;
+      }
+      .status {
+        font-weight: 600;
+        color: #3fb950;
+      }
+      .btn {
+        background: #238636;
+        color: #ffffff;
+        border: none;
+        padding: 10px 22px;
+        border-radius: 6px;
+        cursor: pointer;
+        font-weight: 600;
+        font-size: 14px;
+        margin-top: 10px;
+      }
+      .btn:hover {
+        background: #2ea043;
+      }
+    </style>
   </head>
   <body>
-    <p>Requesting microphone access…</p>
+    <div class="card">
+      <div class="icon">🎙️</div>
+      <h1>Microphone Access</h1>
+      <p id="status-text">Requesting microphone access… Please click <strong>Allow</strong> if prompted by your browser.</p>
+      <button id="close-btn" class="btn" style="display:none;" onclick="window.close()">Return to Extension</button>
+    </div>
     <script src="permission.js"></script>
   </body>
 </html>
