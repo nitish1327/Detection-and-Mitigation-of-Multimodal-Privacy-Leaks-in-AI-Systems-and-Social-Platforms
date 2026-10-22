@@ -1,0 +1,11 @@
+Detected sensitive spans:
+
+- PERSON | mitigation=replace | span=(1, 12)
+  original : Intro
+  sanitized: Tracy Myers
+- PERSON | mitigation=replace | span=(120, 132)
+  original : Riley Chen
+  sanitized: Ronald Brown
+- CARDINAL | mitigation=replace | span=(338, 344)
+  original : 425
+  sanitized: 411093

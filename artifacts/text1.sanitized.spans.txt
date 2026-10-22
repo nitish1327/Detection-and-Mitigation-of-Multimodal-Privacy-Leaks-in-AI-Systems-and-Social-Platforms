@@ -1,0 +1,20 @@
+Detected sensitive spans:
+
+- PERSON | mitigation=replace | span=(40, 52)
+  original : Sarah Jenkins
+  sanitized: Emily Howell
+- CARDINAL | mitigation=replace | span=(79, 85)
+  original : 789
+  sanitized: 747773
+- GPE | mitigation=replace | span=(86, 99)
+  original : Oak Avenue
+  sanitized: North Jessica
+- GPE | mitigation=replace | span=(101, 110)
+  original : Springfield
+  sanitized: Hartmouth
+- CARDINAL | mitigation=replace | span=(191, 197)
+  original : 555
+  sanitized: 397342
+- CARDINAL | mitigation=replace | span=(272, 278)
+  original : 987
+  sanitized: 811308

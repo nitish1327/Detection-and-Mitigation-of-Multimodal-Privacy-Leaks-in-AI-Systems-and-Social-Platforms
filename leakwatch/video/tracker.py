@@ -845,14 +845,29 @@ def generate_video_face_preview(video_path: Path | str) -> dict[str, Any]:
         img_detector = ImageDetector(img_cfg)
         detected_entities = img_detector.detect_frame(first_frame)
 
+        _SENSITIVE_TEXT_KEYWORDS = (
+            "id", "roll", "license", "cardinal", "number", "aadhar",
+            "person", "name", "institution", "org", "phone", "credit",
+            "bank", "account", "money", "address", "street", "location",
+            "gpe", "email", "dob", "date",
+        )
+        _EXCLUDED_LABELS = {
+            "qr_code", "stamp", "signature", "layout_block",
+            "document_card", "barcode", "face", "person",
+        }
+
         s_idx = 1
         for ent in detected_entities:
             if not ent.bbox:
                 continue
             lbl = ent.label.lower()
             txt = (ent.text or "").strip()
-            # Skip pure face entities since they are in faces list
-            if lbl in {"face", "person"} and not txt:
+            # Only genuine text PII fields can be tracked and replaced with Faker synthetic text
+            if not txt or len(txt) < 2:
+                continue
+            if lbl in _EXCLUDED_LABELS:
+                continue
+            if not any(k in lbl for k in _SENSITIVE_TEXT_KEYWORDS):
                 continue
             # Exclude known geographic words from desk mats / map backgrounds
             if txt.lower() in {
@@ -1008,12 +1023,27 @@ def process_selective_video(
                 img_detector = ImageDetector(img_cfg)
                 initial_entities = img_detector.detect_frame(first_frame)
 
+                _SENSITIVE_TEXT_KEYWORDS = (
+                    "id", "roll", "license", "cardinal", "number", "aadhar",
+                    "person", "name", "institution", "org", "phone", "credit",
+                    "bank", "account", "money", "address", "street", "location",
+                    "gpe", "email", "dob", "date",
+                )
+                _EXCLUDED_LABELS = {
+                    "qr_code", "stamp", "signature", "layout_block",
+                    "document_card", "barcode", "face", "person",
+                }
+
                 for ent in initial_entities:
                     if not ent.bbox:
                         continue
                     lbl = ent.label.lower()
                     txt = (ent.text or "").strip()
-                    if lbl in {"face", "person"} and not txt:
+                    if not txt or len(txt) < 2:
+                        continue
+                    if lbl in _EXCLUDED_LABELS:
+                        continue
+                    if not any(k in lbl for k in _SENSITIVE_TEXT_KEYWORDS):
                         continue
                     if txt.lower() in {
                         "ocean", "atlantic", "pacific", "indian", "arctic", "south", "north",

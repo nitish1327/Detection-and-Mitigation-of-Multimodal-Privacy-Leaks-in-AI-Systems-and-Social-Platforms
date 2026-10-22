@@ -1,0 +1,28 @@
+[
+  {
+    "label": "PERSON",
+    "start_sec": 0.0,
+    "end_sec": 0.6892703862660944,
+    "entity_indexes": [
+      0,
+      1
+    ],
+    "entity_ids": [
+      "0:PERSON:1:6:Intro",
+      "1:PERSON:114:124:Riley Chen"
+    ],
+    "ffmpeg_fallback": false
+  },
+  {
+    "label": "CARDINAL",
+    "start_sec": 1.3363090128755364,
+    "end_sec": 1.6163090128755364,
+    "entity_indexes": [
+      2
+    ],
+    "entity_ids": [
+      "2:CARDINAL:330:333:425"
+    ],
+    "ffmpeg_fallback": false
+  }
+]

@@ -1,0 +1,8 @@
+[Intro music fades]
+AGENT: Thank you for calling LeakWatch support. How can I help you today?
+CALLER: Hi, this is Riley Chen. I'm checking that my passport number **A1234567** is safe.
+AGENT: I'll flag that record and sanitize it before the model sees it. Could you also confirm the callback number?
+CALLER: Sure, reach me at +1 (425) 555-1212.
+AGENT: Perfect, I've masked both the passport ID and phone. Anything else?
+CALLER: Nope, that's all. Thanks!
+[Call ends]

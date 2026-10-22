@@ -1,0 +1,11 @@
+Detected sensitive spans:
+
+- PERSON | mitigation=replace | span=(8, 18)
+  original : Ghani Ananya
+  sanitized: Max Barnes
+- CARDINAL_phone_numbers | mitigation=replace | span=(42, 55)
+  original : 9.0625347320
+  sanitized: (728)817-5018
+- CARDINAL_numbers | mitigation=replace | span=(79, 85)
+  original : 7.67669.624
+  sanitized: 762368

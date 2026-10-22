@@ -1,0 +1,14 @@
+Detected sensitive spans:
+
+- PERSON | mitigation=replace | span=(26, 40)
+  original : John Doe
+  sanitized: Matthew Pierce
+- CARDINAL | mitigation=replace | span=(64, 70)
+  original : 456
+  sanitized: 492097
+- PERSON | mitigation=replace | span=(80, 94)
+  original : Metropolis
+  sanitized: Zachary Thomas
+- email | mitigation=mask | span=(124, 142)
+  original : john.doe@metropolis.gov
+  sanitized: todd26@example.org

@@ -1,0 +1,32 @@
+Detected sensitive spans:
+
+- PERSON | mitigation=replace | span=(59, 70)
+  original : Jane D. Smith
+  sanitized: Sonya Olsen
+- ORG | mitigation=replace | span=(72, 81)
+  original : SSN
+  sanitized: Short-Lee
+- CARDINAL | mitigation=replace | span=(83, 89)
+  original : 900-00
+  sanitized: 161979
+- CARDINAL | mitigation=replace | span=(126, 132)
+  original : 123
+  sanitized: 980060
+- address | mitigation=replace | span=(139, 186)
+  original : Street
+  sanitized: 4635 James Manor Suite 843, Lake Mark, MA 50426
+- GPE | mitigation=replace | span=(188, 197)
+  original : Springfield
+  sanitized: Hartmouth
+- email | mitigation=mask | span=(402, 421)
+  original : jane.smith@email.com
+  sanitized: hsexton@example.com
+- phone | mitigation=mask | span=(448, 463)
+  original : 555-010-9988
+  sanitized: +1-997-512-7260
+- PERSON | mitigation=replace | span=(658, 674)
+  original : Jane
+  sanitized: Michelle Vaughan
+- ORG | mitigation=replace | span=(740, 754)
+  original : Social Security
+  sanitized: Gonzales-Smith

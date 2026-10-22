@@ -1,0 +1,26 @@
+Detected sensitive spans:
+
+- PERSON | mitigation=replace | span=(38, 50)
+  original : Sarah Jenkins
+  sanitized: Emily Howell
+- ORG_email | mitigation=replace | span=(52, 71)
+  original : s.jenkins@email.com
+  sanitized: helen56@example.net
+- CARDINAL | mitigation=replace | span=(96, 102)
+  original : 123
+  sanitized: 980060
+- address | mitigation=replace | span=(109, 156)
+  original : Street
+  sanitized: 4635 James Manor Suite 843, Lake Mark, MA 50426
+- GPE | mitigation=replace | span=(158, 167)
+  original : Springfield
+  sanitized: Hartmouth
+- ORG | mitigation=replace | span=(196, 208)
+  original : the Acme Corporation
+  sanitized: Hill-Vaughan
+- CARDINAL | mitigation=replace | span=(260, 266)
+  original : 555
+  sanitized: 397342
+- CARDINAL | mitigation=replace | span=(268, 274)
+  original : 123
+  sanitized: 980060

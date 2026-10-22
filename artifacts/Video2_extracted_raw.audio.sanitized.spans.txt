@@ -1,0 +1,14 @@
+Detected sensitive spans:
+
+- PERSON | mitigation=replace | span=(8, 20)
+  original : Ghani Ananya
+  sanitized: Stacey Perry
+- CARDINAL_phone_numbers | mitigation=replace | span=(44, 63)
+  original : 9.0625347320
+  sanitized: (833)856-1807x65240
+- CARDINAL_numbers | mitigation=replace | span=(87, 93)
+  original : 7.67669.624
+  sanitized: 308329
+- email | mitigation=mask | span=(113, 131)
+  original : me on uradyadheradegmail.com
+  sanitized: dana70@example.com

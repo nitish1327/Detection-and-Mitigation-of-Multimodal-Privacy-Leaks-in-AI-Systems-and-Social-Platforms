@@ -1,0 +1,20 @@
+Detected sensitive spans:
+
+- PERSON | mitigation=replace | span=(30, 40)
+  original : John
+  sanitized: Brian Gray
+- CARDINAL | mitigation=replace | span=(139, 145)
+  original : 9876
+  sanitized: 917338
+- CARDINAL | mitigation=replace | span=(146, 152)
+  original : 543
+  sanitized: 531501
+- credit_card_aadhar | mitigation=mask | span=(177, 193)
+  original : 4111 1111 1111 1111
+  sanitized: 6011366645451500
+- phone | mitigation=mask | span=(279, 291)
+  original : 1 425 555 1212
+  sanitized: 583-609-6958
+- email | mitigation=mask | span=(295, 316)
+  original : nitish.g@example.com
+  sanitized: heather39@example.org

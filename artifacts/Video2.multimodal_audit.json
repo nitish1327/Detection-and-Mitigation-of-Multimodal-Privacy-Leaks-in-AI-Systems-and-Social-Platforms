@@ -1,0 +1,51 @@
+{
+  "timestamp": "2026-10-19T13:42:24Z",
+  "source_video": "C:\\Capstone_Complete\\samples\\video\\Video2.mp4",
+  "sanitized_video": "C:\\Capstone_Complete\\artifacts\\Video2.multimodal_sanitized.mp4",
+  "elapsed_seconds": 64.54,
+  "audio_stream": {
+    "present": true,
+    "sanitized_audio_wav": "artifacts\\Video2_extracted_raw.sanitized.wav",
+    "entities_detected": [
+      {
+        "label": "PERSON",
+        "text": "Michael Jefferson",
+        "mitigation": "replace",
+        "replacement_or_explanation": "Ghani Ananya",
+        "confidence": 0.8
+      },
+      {
+        "label": "CARDINAL_phone_numbers",
+        "text": "001-414-771-1784x2077",
+        "mitigation": "replace",
+        "replacement_or_explanation": "9.0625347320",
+        "confidence": 0.8
+      },
+      {
+        "label": "CARDINAL_numbers",
+        "text": "613483",
+        "mitigation": "replace",
+        "replacement_or_explanation": "7.67669.624",
+        "confidence": 0.8
+      },
+      {
+        "label": "email",
+        "text": "tonyavery@example.com",
+        "mitigation": "mask",
+        "replacement_or_explanation": "me on uradyadheradegmail.com",
+        "confidence": 0.95
+      }
+    ]
+  },
+  "video_stream": {
+    "faces_detected": 1,
+    "faces_blurred": 1,
+    "target_face_ids": [
+      1
+    ],
+    "total_frames": 1220,
+    "redacted_entities": [
+      "FACE"
+    ]
+  }
+}

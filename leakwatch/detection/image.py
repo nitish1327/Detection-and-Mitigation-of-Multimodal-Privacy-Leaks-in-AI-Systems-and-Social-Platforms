@@ -422,51 +422,7 @@ class ImageDetector:
                                 mitigation="blur",
                             )
                         # If we found something at this scale, keep looking for others but maybe skip this version
-
-        # Heuristic fallback for missed QR codes (e.g. low contrast or distorted)
-        h_img, w_img = image.shape[:2]
-        img_area = h_img * w_img
-        
-        grad_x = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
-        grad_y = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
-        abs_grad_x = cv2.convertScaleAbs(grad_x)
-        abs_grad_y = cv2.convertScaleAbs(grad_y)
-        grad = cv2.addWeighted(abs_grad_x, 0.5, abs_grad_y, 0.5, 0)
-        
-        blurred = cv2.blur(grad, (25, 25))
-        _, thresh = cv2.threshold(blurred, 50, 255, cv2.THRESH_BINARY)
-        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-        for cnt in contours:
-            x, y, w, h = cv2.boundingRect(cnt)
-            aspect_ratio = float(w) / h
-            area = w * h
-            
-            # QR checks: aspect ratio close to 1.0, area between 0.8% and 10% of total image area
-            if 0.8 <= aspect_ratio <= 1.25:
-                if img_area * 0.008 <= area <= img_area * 0.1:
-                    # Check for overlap with any already detected QR code
-                    is_duplicate = False
-                    for px, py, pw, ph in processed_points:
-                        overlap_x = max(0, min(x + w, px + pw) - max(x, px))
-                        overlap_y = max(0, min(y + h, py + ph) - max(y, py))
-                        overlap_area = overlap_x * overlap_y
-                        if overlap_area > 0.5 * min(area, pw * ph):
-                            is_duplicate = True
-                            break
-                            
-                    if not is_duplicate:
-                        bbox = BoundingBox(x=x, y=y, width=w, height=h)
-                        processed_points.add((x, y, w, h))
-                        yield DetectedEntity(
-                            modality=Modality.IMAGE,
-                            label="qr_code",
-                            confidence=0.6,
-                            text="QR_CODE",
-                            bbox=bbox,
-                            mitigation="blur",
-                            detection_method="heuristic",
-                        )
+                        pass
 
     def _detect_mrz(self, ocr_results: List[Tuple[Sequence[Tuple[float, float]], str, float]]) -> Iterable[DetectedEntity]:
         """Detect MRZ zones in identity documents."""
@@ -915,6 +871,7 @@ class ImageDetector:
             mask_red2 = cv2.inRange(hsv, np.array([170, 70, 50]), np.array([180, 255, 240]))
             mask_ink = mask_blue | mask_purple | mask_red1 | mask_red2
 
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
             kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
             mask_ink = cv2.morphologyEx(mask_ink, cv2.MORPH_CLOSE, kernel, iterations=2)
             contours, _ = cv2.findContours(mask_ink, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -922,6 +879,16 @@ class ImageDetector:
                 x, y, w, h = cv2.boundingRect(c)
                 area = w * h
                 if (img_area * 0.0005) <= area <= (img_area * 0.12) and w >= 15 and h >= 10:
+                    # Require that ink appears on a light document/paper background (mean gray > 140)
+                    roi_gray = gray[y:y+h, x:x+w]
+                    if float(np.mean(roi_gray)) < 140.0:
+                        continue
+                    # Genuine ink signatures/stamps on paper are ink strokes, not solid saturated fabric (density < 70%)
+                    roi_ink = mask_ink[y:y+h, x:x+w]
+                    ink_density = float(cv2.countNonZero(roi_ink)) / float(area)
+                    if ink_density > 0.70 or ink_density < 0.03:
+                        continue
+
                     aspect = w / float(h) if h > 0 else 0
                     is_stamp = (0.7 <= aspect <= 1.5) and (cv2.contourArea(c) / float(area) > 0.35)
                     label = "STAMP" if is_stamp else "SIGNATURE"
