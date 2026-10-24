@@ -9,7 +9,7 @@ import tempfile
 import urllib.request
 import uuid
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -95,6 +95,11 @@ class FileScanRequest(BaseModel):
     path: str | None = Field(default=None, description="Filesystem path to the asset.")
     url: HttpUrl | None = Field(default=None, description="Optional URL pointing to the asset.")
     policy: PolicyConfig = Field(default_factory=PolicyConfig)
+    detect_only: bool = Field(default=False, description="Return detections without applying mitigation.")
+    selected_entity_types: list[str] | None = Field(
+        default=None,
+        description="Entity labels to mitigate.",
+    )
 
     @model_validator(mode="after")
     def validate_source(self) -> "FileScanRequest":
@@ -184,9 +189,31 @@ def scan_text(request: TextScanRequest) -> ScanResponse:
 def scan_image(request: FileScanRequest) -> ScanResponse:
     source_path, scratch_dir = _materialize_file(request.path, request.url, suffix=".png")
     try:
-        result = PIPELINE.process_image(source_path)
+        if request.detect_only:
+            detected = PIPELINE.image_detector.detect(source_path)
+            detection_result = DetectionResult(
+                source_path=source_path,
+                modality=Modality.IMAGE,
+                entities=detected,
+            )
+            response = _build_response(detection_result, request.policy)
+            response.sanitized_image_base64 = base64.b64encode(source_path.read_bytes()).decode("utf-8")
+            response.redacted_entities = sorted({entity.label.upper() for entity in detected})
+            return response
+
+        selected_types = (
+            {str(t).strip().upper() for t in request.selected_entity_types}
+            if request.selected_entity_types is not None
+            else None
+        )
+        result = PIPELINE.process_image(source_path, selected_entity_types=selected_types)
         response = _build_response(result, request.policy)
         _attach_image_payload(response, result)
+        response.redacted_entities = sorted({
+            entity.label.upper()
+            for entity in result.entities
+            if getattr(entity, "mitigation", "none") != "none"
+        })
         return response
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Image processing failed: {exc}") from exc
@@ -195,7 +222,11 @@ def scan_image(request: FileScanRequest) -> ScanResponse:
 
 
 @app.post("/scan/image/upload", response_model=ScanResponse)
-async def scan_image_upload(file: UploadFile = File(...)) -> ScanResponse:
+async def scan_image_upload(
+    file: UploadFile = File(...),
+    detect_only: bool = Form(False),
+    selected_entity_types: Optional[str] = Form(None),
+) -> ScanResponse:
     """Accept browser-uploaded images via multipart/form-data (field name: file)."""
     if not file.filename:
         raise HTTPException(status_code=400, detail="Image filename is required.")
@@ -223,9 +254,37 @@ async def scan_image_upload(file: UploadFile = File(...)) -> ScanResponse:
     source_path.write_bytes(raw)
 
     try:
-        result = PIPELINE.process_image(source_path)
+        if detect_only:
+            detected = PIPELINE.image_detector.detect(source_path)
+            detection_result = DetectionResult(
+                source_path=source_path,
+                modality=Modality.IMAGE,
+                entities=detected,
+            )
+            response = _build_response(detection_result, PolicyConfig())
+            response.sanitized_image_base64 = base64.b64encode(raw).decode("utf-8")
+            response.redacted_entities = sorted({entity.label.upper() for entity in detected})
+            return response
+
+        selected_types: set[str] | None = None
+        if selected_entity_types is not None:
+            try:
+                parsed = json.loads(selected_entity_types)
+                if isinstance(parsed, list):
+                    selected_types = {str(item).strip().upper() for item in parsed if str(item).strip()}
+                elif isinstance(parsed, str):
+                    selected_types = {str(item).strip().upper() for item in parsed.split(",") if item.strip()}
+            except Exception:
+                selected_types = {str(item).strip().upper() for item in selected_entity_types.split(",") if item.strip()}
+
+        result = PIPELINE.process_image(source_path, selected_entity_types=selected_types)
         response = _build_response(result, PolicyConfig())
         _attach_image_payload(response, result)
+        response.redacted_entities = sorted({
+            entity.label.upper()
+            for entity in result.entities
+            if getattr(entity, "mitigation", "none") != "none"
+        })
         return response
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Image processing failed: {exc}") from exc

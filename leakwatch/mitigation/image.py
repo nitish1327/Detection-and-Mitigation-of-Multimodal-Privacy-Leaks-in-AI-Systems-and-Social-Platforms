@@ -25,19 +25,7 @@ from ..utils.types import BoundingBox, DetectedEntity
 
 
 class ImageMitigator:
-    """Apply blurring or synthetic replacement to sensitive regions."""
-# Labels that should always be blurred (not replaced with synthetic text)
-BLUR_LABELS = frozenset({
-    "face", "document_card", "id_number", "person_name",
-    "institution_name", "sensitive_text",
-    "PERSON", "ORG", "GPE", "CARDINAL", "MONEY",
-    "email", "phone", "credit_card",
-    "scene_text",  # In privacy context, blur all OCR text by default
-})
-
-
-class ImageMitigator:
-    """Apply blurring to faces, text, and document regions for privacy protection."""
+    """Apply natural synthetic replacement, perturbation, or blurring to sensitive regions."""
 
     def __init__(self, config: ImageConfig) -> None:
         self.config = config
@@ -107,15 +95,14 @@ class ImageMitigator:
         # the same bbox.  Rendering all of them would cause overlapping text at
         # wrong sizes.  We keep only the highest-priority entity per bbox.
         _label_priority = {
-            "address": 0, "STREET_ADDRESS": 0,
-            "PERSON": 1, "NAME": 1, "name": 1,
-            "license": 2, "roll_number": 2,
-            "GPE": 3, "LOCATION": 3,
-            "ORG": 4,
-            "dob": 5,
-            "aadhar": 6,
-            "numbers": 7,
-            "CARDINAL": 8,
+            "AADHAR": 0, "aadhar": 0,
+            "id_number": 1, "LICENSE": 1, "license": 1, "roll_number": 1, "pan": 1, "PAN": 1,
+            "dob": 2, "DOB": 2, "DATE": 2,
+            "address": 3, "STREET_ADDRESS": 3,
+            "PERSON": 4, "NAME": 4, "name": 4, "person_name": 4,
+            "GPE": 5, "LOCATION": 5,
+            "ORG": 6, "ORGANIZATION": 6,
+            "numbers": 7, "CARDINAL": 7,
         }
 
         def _bbox_key(e: DetectedEntity) -> tuple:
@@ -130,12 +117,38 @@ class ImageMitigator:
             """
             if not a.bbox or not b.bbox:
                 return False
+
+            # CRITICAL SAFETY: fundamentally different field types must NEVER merge!
+            # An ID number, Aadhaar number, or DOB should NEVER absorb an Address or Name.
+            def _field_type(lbl: str) -> str:
+                u = lbl.upper()
+                if u in {"AADHAR", "ID_NUMBER", "LICENSE", "PAN", "ROLL_NUMBER"}:
+                    return "id"
+                if u in {"DOB", "DATE"}:
+                    return "dob"
+                if u in {"ADDRESS", "STREET_ADDRESS", "GPE", "LOCATION"}:
+                    return "address"
+                if u in {"PERSON", "NAME", "PERSON_NAME"}:
+                    return "name"
+                return "other"
+
+            fa, fb = _field_type(a.label), _field_type(b.label)
+            if fa != fb:
+                return False
+
             ax1, ay1 = a.bbox.x, a.bbox.y
             ax2, ay2 = ax1 + a.bbox.width, ay1 + a.bbox.height
             bx1, by1 = b.bbox.x, b.bbox.y
             bx2, by2 = bx1 + b.bbox.width, by1 + b.bbox.height
 
-            # Check geometric intersection
+            # Check geometric intersection (strictly same line only)
+            center_ya = ay1 + a.bbox.height / 2
+            center_yb = by1 + b.bbox.height / 2
+            avg_h = (a.bbox.height + b.bbox.height) / 2
+            if abs(center_ya - center_yb) > avg_h * 0.65:
+                # Different vertical lines: NEVER merge vertically
+                return False
+
             ix1, iy1 = max(ax1, bx1), max(ay1, by1)
             ix2, iy2 = min(ax2, bx2), min(ay2, by2)
             if ix1 < ix2 and iy1 < iy2:
@@ -146,24 +159,40 @@ class ImageMitigator:
                 if smaller > 0 and (inter / smaller) > threshold:
                     return True
 
-            # Vertical adjacency: only for address fields of the same field class,
-            # to avoid merging separate fields like name, dob, and roll number
-            is_address_a = a.label in {"address", "STREET_ADDRESS", "GPE", "LOCATION"}
-            is_address_b = b.label in {"address", "STREET_ADDRESS", "GPE", "LOCATION"}
-            if is_address_a and is_address_b:
-                x_overlap = min(ax2, bx2) - max(ax1, bx1)
-                min_w = min(a.bbox.width, b.bbox.width)
-                if min_w > 0 and x_overlap / min_w > 0.5:
-                    gap = max(0, max(ay1, by1) - min(ay2, by2))
+            # Vertical adjacency between separate lines is strictly disabled:
+            # Merging separate lines vertically collapses multi-line blocks into
+            # giant boxes and inflates synthetic text font sizes unnaturally.
+
+            # Horizontal same-line adjacency: merge adjacent text words on the same line
+            is_name_a = fa == "name"
+            is_name_b = fb == "name"
+            is_address_a = fa == "address"
+            is_address_b = fb == "address"
+            is_dob_or_id_a = a.label in {"dob", "DOB", "AADHAR", "aadhar", "id_number", "LICENSE", "license"}
+            is_dob_or_id_b = b.label in {"dob", "DOB", "AADHAR", "aadhar", "id_number", "LICENSE", "license"}
+            can_merge_horizontal = False
+            if is_name_a and is_name_b:
+                can_merge_horizontal = True
+            elif is_address_a and is_address_b:
+                can_merge_horizontal = True
+            elif not is_dob_or_id_a and not is_dob_or_id_b:
+                can_merge_horizontal = True
+
+            if can_merge_horizontal:
+                y_overlap = min(ay2, by2) - max(ay1, by1)
+                min_h = min(a.bbox.height, b.bbox.height)
+                if min_h > 0 and y_overlap / min_h > 0.35:
+                    x_gap = max(0, max(ax1, bx1) - min(ax2, bx2))
                     line_h = max(a.bbox.height, b.bbox.height)
-                    if gap < line_h * 0.5:
+                    if x_gap < line_h * 2.0:
                         return True
- 
+
             return False
 
-        # Separate face/qr (always processed) from text PII (needs dedup)
-        non_text = [e for e in sorted_entities if e.label in {"face", "qr_code"}]
-        text_pii = [e for e in sorted_entities if e.label not in {"face", "qr_code"}]
+        # Separate face/qr/signature/barcode from text PII
+        non_text_labels = {"face", "qr_code", "barcode", "signature", "stamp", "document_card", "license_plate"}
+        non_text = [e for e in sorted_entities if e.label.lower() in non_text_labels]
+        text_pii = [e for e in sorted_entities if e.label.lower() not in non_text_labels]
 
         # Group text PII by overlapping bboxes; keep highest priority per group
         # CRITICAL: merge all bboxes in the group into one unified bbox so
@@ -173,16 +202,20 @@ class ImageMitigator:
         for i, ent_i in enumerate(text_pii):
             if i in used:
                 continue
-            # Find all entities overlapping with ent_i
+            # Find all entities overlapping with ent_i (full transitive closure)
             group = [ent_i]
             used.add(i)
-            for j, ent_j in enumerate(text_pii):
-                if j in used:
-                    continue
-                # Check overlap against ALL members of the group (transitive)
-                if any(_bboxes_overlap(member, ent_j) for member in group):
-                    group.append(ent_j)
-                    used.add(j)
+            while True:
+                added = False
+                for j, ent_j in enumerate(text_pii):
+                    if j in used:
+                        continue
+                    if any(_bboxes_overlap(member, ent_j) for member in group):
+                        group.append(ent_j)
+                        used.add(j)
+                        added = True
+                if not added:
+                    break
             # Pick the best entity from the group
             best = min(group, key=lambda e: _label_priority.get(e.label, 99))
 
@@ -198,12 +231,21 @@ class ImageMitigator:
                         x=min_x, y=min_y,
                         width=max_x2 - min_x, height=max_y2 - min_y,
                     )
-                    # Concatenate original texts for proper font-scale sizing
-                    all_texts = [e.text for e in group if e.text]
-                    longest_text = max(all_texts, key=len) if all_texts else best.text
+                    # Sort group members top-to-bottom, left-to-right so multi-line text reads naturally
+                    sorted_group = sorted(
+                        [e for e in group if e.bbox],
+                        key=lambda e: (round(e.bbox.y / max(1, e.bbox.height * 0.5)), e.bbox.x)
+                    )
+                    words_in_order = []
+                    for e in sorted_group:
+                        if e.text:
+                            for w in e.text.split():
+                                if not words_in_order or w.lower() != words_in_order[-1].lower():
+                                    words_in_order.append(w)
+                    joined_text = " ".join(words_in_order)
                     best = best.model_copy(update={
                         "bbox": merged_bbox,
-                        "text": longest_text,
+                        "text": joined_text if joined_text else best.text,
                     })
             deduped_text.append(best)
 
@@ -218,8 +260,27 @@ class ImageMitigator:
                 updated_entities.append(entity)
                 continue
 
+            style = entity.mitigation if entity.mitigation != "none" else self.config.default_style
+            if entity.label in {"qr_code", "mrz_zone"}:
+                style = "aggressive_blur"
+
+            if entity.label.lower() in {"signature", "stamp"}:
+                style = "blur"
+
+            if entity.label == "face" and style in {"blur", "synthetic"}:
+                style = "replace"
+
+            # Skip tiny false-positive faces (emblems, logos, watermarks) for synthetic/replace
+            if (
+                entity.label == "face"
+                and style in {"synthetic", "replace"}
+                and entity.confidence < 0.6
+                and (entity.bbox.width < 45 or entity.bbox.height < 45)
+            ):
+                continue
+
             # Compute padded region
-            is_text_pii = entity.label not in {"face", "qr_code", "person"}
+            is_text_pii = entity.label.lower() not in non_text_labels
             pad_pct = 0.0 if is_text_pii else self.config.padding_percent
             padding = int(max(entity.bbox.width, entity.bbox.height) * pad_pct)
             x = max(0, int(entity.bbox.x) - padding)
@@ -232,21 +293,16 @@ class ImageMitigator:
             if roi_original.size == 0:
                 continue
 
-            style = entity.mitigation if entity.mitigation != "none" else self.config.default_style
-            if entity.label in {"qr_code", "aadhar", "mrz_zone"} and style not in {"synthetic", "replace"}:
-                style = "aggressive_blur"
-
-            if entity.label == "face" and (entity.mitigation in {"synthetic", "replace"} or self.config.default_style in {"synthetic", "replace"}):
-                if style in {"blur", "synthetic"}:
-                    style = "replace"
+            if (self.config.default_style in {"synthetic", "replace"} or style in {"synthetic", "replace"}) and entity.label.lower() not in non_text_labels:
+                style = "replace"
 
             mitigated_text = entity.text
-            mapped_style = "synthetic" if style == "replace" else style
+            mapped_style = "synthetic" if (style in {"replace", "synthetic"} and entity.label.lower() not in non_text_labels) else style
 
-            if mapped_style == "synthetic":
+            if mapped_style in {"synthetic", "replace"}:
                 if entity.label == "face":
                     # Skip face replacement for tiny faces (watermarks, ghost images)
-                    if w < 40 or h < 40:
+                    if w < 20 or h < 20:
                         image[y : y + h, x : x + w] = cv2.GaussianBlur(roi_original, (31, 31), 10)
                         mitigated_text = "[BLURRED_SMALL_FACE]"
                     else:
@@ -256,6 +312,9 @@ class ImageMitigator:
                 elif entity.label == "qr_code":
                     image[y : y + h, x : x + w] = self._blur_qr(roi_original)
                     mitigated_text = "[QR_BLURRED]"
+                elif entity.label.lower() in {"signature", "stamp"}:
+                    image[y : y + h, x : x + w] = self._blur_region(roi_original)
+                    mitigated_text = "[SIGNATURE_BLURRED]"
                 else:
                     # Use roi_current so previous erasures are visible (no double text)
                     roi_result, mitigated_text = self._replace_pii_text(roi_current, entity)
@@ -506,7 +565,7 @@ class ImageMitigator:
         img_h, img_w = original.shape[:2]
 
         # Need a reasonable face size for grid warping to look good
-        if w < 40 or h < 40:
+        if w < 20 or h < 20:
             return None
 
         # Work on an expanded region around the face for smooth transitions
@@ -753,301 +812,409 @@ class ImageMitigator:
 
         return output
 
+
     # ------------------------------------------------------------------
     # 3. PII TEXT – erase original, then render synthetic at matching size
     # ------------------------------------------------------------------
     def _replace_pii_text(
         self, roi: np.ndarray, entity: DetectedEntity,
     ) -> Tuple[np.ndarray, str]:
-        """Fully opaque text replacement that looks like a new card.
+        """Natural text replacement that cleanly erases original ink strokes and renders authentic synthetic text.
 
-        Strategy:
-        1. Detect the background color from ROI borders
-        2. Detect the text color from the darkest/lightest pixels
-        3. Inpaint to erase original text cleanly
-        4. Render synthetic text at exact matching size
-        5. NO alpha blending — fully opaque to prevent original showing through
+        Key features:
+        1. Non-destructive inpainting: Inpaints ONLY the dilated ink mask using Telea inpainting,
+           preserving 100% of underlying card texture, guilloche patterns, background gradients, and paper grain.
+           Eliminates blocky flat rectangular patches completely.
+        2. Accurate TrueType typography: Uses Arial Bold / Segoe UI Bold with Pillow for realistic print appearance.
+        3. Precise cap-height calibration and alignment (centered for Aadhaar/badge names, left-aligned for fields).
+        4. Camera MTF anti-aliasing blur to seamlessly blend rendered glyphs into photo noise.
         """
         h, w = roi.shape[:2]
         if h < 5 or w < 5:
             return roi, entity.text or ""
 
-        # ---- Step 1: Detect background & text colors from the ROI ----
+        # ---- Step 1: Robust background & text color detection ----
+        # Sample border pixels (top, bottom, left, right rows)
         border = np.concatenate([roi[0, :], roi[-1, :], roi[:, 0], roi[:, -1]])
-        bg_color = np.median(border, axis=0).astype(np.uint8).tolist()
-        is_light_bg = np.mean(bg_color) > 127
+        bg_color = np.percentile(border, 50, axis=0).astype(np.uint8)
+        bg_mean = float(np.mean(bg_color))
+        is_light_bg = bg_mean > 127
 
-        # Detect original text color from non-background pixels
         gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-        if is_light_bg:
-            # Dark text on light bg — find the darkest cluster
-            text_mask = gray < (np.mean(gray) - 20)
-            text_color = (20, 20, 20)  # near-black for clean look
-        else:
-            text_mask = gray > (np.mean(gray) + 20)
-            text_color = (240, 240, 240)
 
-        # ---- Step 2: Erase original text — two-stage for guaranteed removal ----
-        # Stage A: Otsu threshold to find text pixels, then inpaint
-        inpaint_mask = np.zeros((h, w), dtype=np.uint8)
+        # Text color: sample pixels that deviate most from background
+        if is_light_bg:
+            dark_val = np.percentile(gray, 5)
+            text_pixels = roi[gray <= dark_val + 15]
+            if len(text_pixels) > 0:
+                text_color_bgr = np.median(text_pixels, axis=0).astype(np.uint8)
+            else:
+                text_color_bgr = np.array([20, 20, 20], dtype=np.uint8)
+            text_color_bgr = np.minimum(text_color_bgr, np.array([75, 75, 75], dtype=np.uint8))
+        else:
+            bright_val = np.percentile(gray, 95)
+            text_pixels = roi[gray >= bright_val - 15]
+            if len(text_pixels) > 0:
+                text_color_bgr = np.median(text_pixels, axis=0).astype(np.uint8)
+            else:
+                text_color_bgr = np.array([235, 235, 235], dtype=np.uint8)
+            text_color_bgr = np.maximum(text_color_bgr, np.array([180, 180, 180], dtype=np.uint8))
+
+        # ---- Step 2: Build inpaint mask around text pixels ----
         if is_light_bg:
             _, inpaint_mask = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
         else:
             _, inpaint_mask = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        # Dilate mask generously to ensure full coverage of text strokes
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-        inpaint_mask = cv2.dilate(inpaint_mask, kernel, iterations=3)
 
-        erased = cv2.inpaint(roi, inpaint_mask, inpaintRadius=7, flags=cv2.INPAINT_TELEA)
+        # Dilate to cover ink strokes and anti-aliased edges
+        dilation_iters = 2 if h >= 26 else 1
+        k = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+        inpaint_mask = cv2.dilate(inpaint_mask, k, iterations=dilation_iters)
 
-        # Stage B: Fill interior with solid background color to guarantee
-        # no residual text, especially in multi-line merged bounding boxes.
-        # Keep a thin border so the fill blends with surroundings.
-        margin = max(2, min(h, w) // 15)
-        fill_region = np.full_like(erased, bg_color, dtype=np.uint8)
-        # Blend: keep original edges, solid fill in center
-        blend_mask = np.zeros((h, w), dtype=np.float32)
-        blend_mask[margin:h - margin, margin:w - margin] = 1.0
-        # Feather the transition
-        blend_mask = cv2.GaussianBlur(blend_mask, (margin * 2 + 1, margin * 2 + 1), 0)
-        blend_3ch = cv2.merge([blend_mask, blend_mask, blend_mask])
-        erased = (fill_region.astype(np.float32) * blend_3ch +
-                  erased.astype(np.float32) * (1.0 - blend_3ch)).clip(0, 255).astype(np.uint8)
+        # ---- Step 3: Clean Inpainting (NO Pass B / NO flat patch) ----
+        # Telea inpainting replaces only the ink stroke pixels, keeping all surrounding texture intact
+        erased = cv2.inpaint(roi, inpaint_mask, inpaintRadius=4, flags=cv2.INPAINT_TELEA)
 
-        # ---- Step 3: Generate synthetic text ----
+        # ---- Step 4: Generate synthetic replacement text ----
         fake_text = self._generate_fake_text(entity)
 
-        # ---- Step 4: Render text at size matching the ORIGINAL text ----
-        # The key insight: we first compute the font scale that the ORIGINAL
-        # text would need to fit the ROI, then apply that same scale to the
-        # replacement text.  If the replacement is longer, we shrink to fit;
-        # if shorter, we keep the same scale (never blow up).
-        font = cv2.FONT_HERSHEY_DUPLEX  # cleaner, more document-like
+        # Multi-line wrapping for tall boxes (multi-line address blocks)
+        num_lines = max(1, fake_text.count("\n") + 1)
+        if h >= 28 and len(fake_text) > 18 and "\n" not in fake_text:
+            import textwrap
+            chars_per_line = max(16, len(fake_text) // max(2, round(h / 18)))
+            wrapped = textwrap.wrap(fake_text, width=chars_per_line)
+            if len(wrapped) > 1:
+                fake_text = "\n".join(wrapped)
+                num_lines = len(wrapped)
 
-        target_w = int(w * 0.90)
-        target_h = int(h * 0.70)
-        orig_text = entity.text or fake_text
+        # ---- Step 5: Size font and render with Pillow ----
+        # In printed identity documents, body text (names, addresses, DOB, ID)
+        # has a natural font size of 10-12pt regular.
+        # Only the 12-digit Aadhaar number has larger bold digits (~18-20pt).
+        line_h = h / num_lines
+        is_large_aadhaar_number = (
+            entity.label.upper() == "AADHAR"
+            and bool(re.search(r"\d{4}\s\d{4}\s\d{4}", fake_text))
+            and h >= 24
+        )
 
-        # Binary search: what scale would the ORIGINAL text render at?
-        lo, hi = 0.1, 8.0
-        orig_scale = 0.5
-        for _ in range(25):
-            mid = (lo + hi) / 2.0
-            ts = cv2.getTextSize(orig_text, font, mid, max(1, int(mid * 1.0)))[0]
-            if ts[0] <= target_w and ts[1] <= target_h:
-                orig_scale = mid
-                lo = mid
-            else:
-                hi = mid
+        target_w_px = max(int(w * 0.95), w - 4)
 
-        # Start with the original text's scale
-        font_scale = orig_scale
-        thickness = max(1, int(font_scale * 1.0))
+        if is_large_aadhaar_number:
+            target_pt = min(20, max(16, int(line_h * 0.58)))
+            is_bold = True
+        else:
+            target_pt = min(11, max(9, int(line_h * 0.65)))
+            is_bold = False
 
-        # Check if replacement text fits at this scale
-        text_size = cv2.getTextSize(fake_text, font, font_scale, thickness)[0]
-        if text_size[0] > target_w or text_size[1] > target_h:
-            # Replacement is longer — shrink just enough to fit
-            lo, hi = 0.1, font_scale
-            for _ in range(25):
-                mid = (lo + hi) / 2.0
-                ts = cv2.getTextSize(fake_text, font, mid, max(1, int(mid * 1.0)))[0]
-                if ts[0] <= target_w and ts[1] <= target_h:
-                    font_scale = mid
-                    lo = mid
-                else:
-                    hi = mid
-            thickness = max(1, int(font_scale * 1.0))
-            text_size = cv2.getTextSize(fake_text, font, font_scale, thickness)[0]
-
-        # ---- Step 5: Render text with anti-aliased TrueType font via Pillow ----
         rendered_with_pil = False
         try:
             from PIL import Image as PILImage, ImageDraw as PILImageDraw, ImageFont as PILImageFont
-            target_pt = max(9, int(h * 0.72))
-            font_candidates = [
-                "arial.ttf", "segoeui.ttf", "calibri.ttf", "tahoma.ttf", "DejaVuSans.ttf",
-                "C:/Windows/Fonts/arial.ttf", "C:/Windows/Fonts/segoeui.ttf",
-                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+
+            bold_candidates = [
+                "C:/Windows/Fonts/arialbd.ttf",
+                "C:/Windows/Fonts/segoeuib.ttf",
+                "C:/Windows/Fonts/calibrib.ttf",
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
             ]
-            pil_font = None
-            for fc in font_candidates:
-                try:
-                    pil_font = PILImageFont.truetype(fc, target_pt)
-                    break
-                except Exception:
-                    continue
-            if pil_font is None:
-                pil_font = PILImageFont.load_default()
+            regular_candidates = [
+                "C:/Windows/Fonts/arial.ttf",
+                "C:/Windows/Fonts/segoeui.ttf",
+                "C:/Windows/Fonts/calibri.ttf",
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            ]
+            font_candidates = bold_candidates if is_bold else regular_candidates
 
-            if pil_font:
-                bbox_text = pil_font.getbbox(fake_text)
-                tw = bbox_text[2] - bbox_text[0]
-                th = bbox_text[3] - bbox_text[1]
-                if tw > target_w and target_w > 0:
-                    scale_factor = target_w / float(tw)
-                    new_pt = max(8, int(target_pt * scale_factor))
-                    for fc in font_candidates:
-                        try:
-                            pil_font = PILImageFont.truetype(fc, new_pt)
-                            break
-                        except Exception:
-                            continue
-                    bbox_text = pil_font.getbbox(fake_text)
-                    tw = bbox_text[2] - bbox_text[0]
-                    th = bbox_text[3] - bbox_text[1]
+            def _load_pil_font(size: int):
+                for fc in font_candidates:
+                    try:
+                        return PILImageFont.truetype(fc, size)
+                    except Exception:
+                        continue
+                return PILImageFont.load_default()
 
-                tx = max(2, (w - tw) // 2)
-                ty = max(0, (h - th) // 2 - bbox_text[1])
+            pil_img_dummy = PILImage.fromarray(cv2.cvtColor(erased, cv2.COLOR_BGR2RGB))
+            dummy_draw = PILImageDraw.Draw(pil_img_dummy)
 
-                pil_img = PILImage.fromarray(cv2.cvtColor(erased, cv2.COLOR_BGR2RGB))
-                draw = PILImageDraw.Draw(pil_img)
-                rgb_color = (int(text_color[2]), int(text_color[1]), int(text_color[0]))
+            pil_font = _load_pil_font(target_pt)
+            if "\n" in fake_text:
+                bb = dummy_draw.multiline_textbbox((0, 0), fake_text, font=pil_font, spacing=3)
+            else:
+                bb = pil_font.getbbox(fake_text)
+            tw, th = bb[2] - bb[0], bb[3] - bb[1]
+
+            if tw > target_w_px and target_w_px > 20:
+                scale = target_w_px / float(tw)
+                target_pt = max(7, int(target_pt * scale))
+                pil_font = _load_pil_font(target_pt)
+                if "\n" in fake_text:
+                    bb = dummy_draw.multiline_textbbox((0, 0), fake_text, font=pil_font, spacing=3)
+                else:
+                    bb = pil_font.getbbox(fake_text)
+                tw, th = bb[2] - bb[0], bb[3] - bb[1]
+
+            if is_large_aadhaar_number:
+                tx = max(2, (w - tw) // 2 - bb[0])
+            else:
+                tx = max(2, 2 - bb[0])
+
+            if tx + bb[0] + tw > w:
+                tx = max(0, w - tw - 2 - bb[0])
+
+            ty = max(0, (h - th) // 2 - bb[1])
+
+            pil_img = PILImage.fromarray(cv2.cvtColor(erased, cv2.COLOR_BGR2RGB))
+            draw = PILImageDraw.Draw(pil_img)
+            ink_color = np.clip(text_color_bgr, 30, 70)
+            rgb_color = (int(ink_color[2]), int(ink_color[1]), int(ink_color[0]))
+            if "\n" in fake_text:
+                draw.multiline_text((tx, ty), fake_text, fill=rgb_color, font=pil_font, spacing=3)
+            else:
                 draw.text((tx, ty), fake_text, fill=rgb_color, font=pil_font)
-                erased = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
-                rendered_with_pil = True
-        except Exception as exc:
-            LOGGER.debug("Pillow font rendering fallback: %s", exc)
+            erased = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+
+            # Subtle camera blur (anti-aliasing rendered glyphs into image texture)
+            erased = cv2.GaussianBlur(erased, (3, 3), 0.25)
+            rendered_with_pil = True
+        except Exception:
             rendered_with_pil = False
 
         if not rendered_with_pil:
+            font = cv2.FONT_HERSHEY_DUPLEX
+            font_scale = 0.8 if is_large_aadhaar_number else 0.42
+            thickness = 2 if is_large_aadhaar_number else 1
+            text_size = cv2.getTextSize(fake_text, font, font_scale, thickness)[0]
+            text_x = max(2, (w - text_size[0]) // 2) if is_large_aadhaar_number else max(2, 2)
             text_y = (h + text_size[1]) // 2
-            text_x = max(2, (w - text_size[0]) // 2)
+            ink_color = np.clip(text_color_bgr, 30, 70)
+            text_color_tuple = (int(ink_color[0]), int(ink_color[1]), int(ink_color[2]))
             cv2.putText(erased, fake_text, (text_x, text_y), font,
-                        font_scale, text_color, thickness, cv2.LINE_AA)
+                        font_scale, text_color_tuple, thickness, cv2.LINE_AA)
 
-        # ---- Step 6: Add subtle noise to match document texture ----
-        noise = np.random.normal(0, 1.5, erased.shape).astype(np.float32)
-        result = cv2.add(erased.astype(np.float32), noise).clip(0, 255).astype(np.uint8)
-
-        # FULLY OPAQUE — return the result directly, no alpha blending
-        return result, fake_text
+        return erased, fake_text
 
     # ------------------------------------------------------------------
     # Fake text generation
     # ------------------------------------------------------------------
     def _generate_fake_text(self, entity: DetectedEntity) -> str:
-        """Generate contextually appropriate fake text for a PII entity of the exact same size.
+        """Generate contextually appropriate, natural, complete fake text for a PII entity.
 
-        Gender-aware: uses entity.metadata['gender'] to pick male/female
-        names so that male names are replaced with male names and vice versa.
+        Ensures zero truncated words, zero 'AAAA' padding, and authentic locale formatting.
         """
         label = entity.label.upper()
-        orig = entity.text or ""
+        orig = (entity.text or "").strip()
         L = len(orig)
 
         if L == 0:
             return f"<{label}>"
 
-        # Helper to preserve character casing and numeric digits
-        def format_preserve(text: str) -> str:
+        # Aadhaar: 12 digits (or 16-digit VID), grouped 4 4 4 if original had spaces
+        if label == "AADHAR":
+            d1 = np.random.randint(2000, 9999)
+            d2 = np.random.randint(1000, 9999)
+            d3 = np.random.randint(1000, 9999)
+            digits_only = re.sub(r"\D", "", orig)
+            if len(digits_only) == 16:
+                d4 = np.random.randint(1000, 9999)
+                prefix = "VID : " if "VID" in orig.upper() or "MID" in orig.upper() else ""
+                return f"{prefix}{d1} {d2} {d3} {d4}"
+            if " " in orig or L > 12:
+                return f"{d1} {d2} {d3}"
+            return f"{d1}{d2}{d3}"
+
+        # Person name
+        if label in {"PERSON", "NAME", "PERSON_NAME"}:
+            gender = entity.metadata.get("gender")
+            indian_male = [
+                "Arjun R", "Rahul Kumar", "Vivek Patel", "Aditya Sharma",
+                "Sanjay Verma", "Chinta Sai", "Rohit Verma", "Manish N", "Abhishek K",
+                "Pranav G", "Nikhil Shetty", "Suresh Babu", "Vikram Joshi",
+            ]
+            indian_female = [
+                "Priya Sharma", "Ananya Rao", "Pooja Patel", "Sneha Reddy", "Kavya Nair",
+                "Meera Iyer", "Divya Menon", "Shreya Deshmukh", "Aishwarya G", "Deepika Joshi",
+            ]
+            western_male = [
+                "Marcelo Silva", "David Miller", "Alexander Cross", "Robert Chen", "Lucas Moreira",
+            ]
+            western_female = [
+                "Emma Watson", "Sarah Connor", "Laura Palmer", "Clara Oswald", "Julia Stiles",
+            ]
+
+            is_western = any(w in orig.upper() for w in ["RONALDO", "CRISTIANO", "JOHN", "MICHAEL", "SMITH", "SILVA"])
+            candidates = (western_female if gender == "female" else western_male) if is_western else (indian_female if gender == "female" else indian_male)
+
+            orig_word_count = len(orig.split())
+            matching = [c for c in candidates if len(c.split()) == orig_word_count]
+            if not matching:
+                matching = sorted(candidates, key=lambda c: abs(len(c) - L))
+            chosen = str(np.random.choice(matching)) if matching else candidates[0]
+
+            # Preserve S/O, D/O, W/O, C/O prefix if present
+            so_match = re.match(r"^(s/o|d/o|w/o|c/o|son of|daughter of|wife of)[:\s]*", orig, re.IGNORECASE)
+            prefix = ""
+            if so_match:
+                prefix = so_match.group(0).rstrip() + " "
+
+            if orig.isupper():
+                return prefix + chosen.upper()
+            return prefix + chosen
+
+        # Date of Birth
+        if label == "DOB":
+            sep = "/" if "/" in orig else ("-" if "-" in orig else ("." if "." in orig else "/"))
+            year = np.random.randint(1982, 2005)
+            month = np.random.randint(1, 13)
+            day = np.random.randint(1, 29)
+            if re.match(r"^\d{4}", orig):
+                return f"{year:04d}{sep}{month:02d}{sep}{day:02d}"
+            return f"{day:02d}{sep}{month:02d}{sep}{year:04d}"
+
+        # Driving license / Roll number / ID number / PAN card / Enrollment Number
+        if label in {"LICENSE", "ID_NUMBER", "ROLL_NUMBER", "PAN"}:
+            clean_orig = orig.replace(" ", "")
+
+            # Aadhaar enrollment number (e.g. 2189/42082/02898 or Enrollment No 2189/42082/02898)
+            enr_match = re.search(r"(\d{4})/(\d{5})/(\d{5})", orig)
+            if enr_match or any(k in orig.lower() for k in ["enroll", "enrol"]):
+                n1 = np.random.randint(2100, 2999)
+                n2 = np.random.randint(10000, 99999)
+                n3 = np.random.randint(10000, 99999)
+                prefix = "Enrollment No " if any(k in orig.lower() for k in ["enroll", "enrol"]) else ""
+                return f"{prefix}{n1}/{n2}/{n3}"
+
+            # College Roll Number (e.g. PES2UG23CS189)
+            pes_match = re.search(r"([A-Z]{3,4}\dUG\d{2}[A-Z]{2})(\d{3})", clean_orig)
+            if pes_match:
+                prefix = pes_match.group(1)
+                num = np.random.randint(100, 599)
+                return f"{prefix}{num:03d}"
+
+            # PAN Card (5 letters + 4 digits + 1 letter, e.g. BKZPR4928K)
+            if re.fullmatch(r"[A-Z]{5}\d{4}[A-Z]", clean_orig):
+                letters1 = "".join(np.random.choice(list("ABCDEFGHJKLMNPQRSTUVWXYZ"), 5))
+                digits = np.random.randint(1000, 9999)
+                letter2 = np.random.choice(list("ABCDEFGHJKLMNPQRSTUVWXYZ"))
+                return f"{letters1}{digits}{letter2}"
+
+            # Driving license (e.g. AP00820210048192 or KA01 20180004521)
+            dl_match = re.search(r"^([A-Z]{2}\d{2,3})\s*(\d{4})\s*(\d{5,7})$", orig)
+            if dl_match:
+                rto, yr, ser = dl_match.groups()
+                new_yr = np.random.randint(2015, 2024)
+                new_ser = np.random.randint(10000, 99999)
+                return f"{rto} {new_yr}{new_ser:07d}" if " " in orig else f"{rto}{new_yr}{new_ser:07d}"
+
+            # General alphanumeric ID: preserve length and character classes
             chars = []
-            for c in text:
+            for c in orig:
                 if c.isupper():
-                    chars.append(np.random.choice(list("ABCDEFGHIJKLMNOPQRSTUVWXYZ")))
+                    chars.append(np.random.choice(list("ABCDEFGHJKLMNPQRSTUVWXYZ")))
                 elif c.islower():
-                    chars.append(np.random.choice(list("abcdefghijklmnopqrstuvwxyz")))
+                    chars.append(np.random.choice(list("abcdefghijkmnopqrstuvwxyz")))
                 elif c.isdigit():
-                    chars.append(np.random.choice(list("0123456789")))
+                    chars.append(str(np.random.randint(0, 10)))
                 else:
                     chars.append(c)
             return "".join(chars)
 
-        if not self.faker:
-            return format_preserve(orig)
-
-        if label == "AADHAR":
-            return f"{self.faker.random_number(4, True)} {self.faker.random_number(4, True)} {self.faker.random_number(4, True)}"[:L]
-
-        if label in {"PERSON", "NAME"}:
-            gender = entity.metadata.get("gender")
-            for _ in range(50):
-                if gender == "male":
-                    candidate = self.faker.name_male()
-                elif gender == "female":
-                    candidate = self.faker.name_female()
-                else:
-                    candidate = self.faker.name()
-                
-                if orig.isupper():
-                    candidate = candidate.upper()
-                
-                if len(candidate) == L:
-                    return candidate
-            
-            # Fallback: truncate or pad
-            candidate = self.faker.name()
-            if orig.isupper():
-                candidate = candidate.upper()
-            if len(candidate) > L:
-                return candidate[:L]
-            else:
-                needed = L - len(candidate)
-                padding = "".join(np.random.choice(list("ABCDEFGHIJKLMNOPQRSTUVWXYZ")) for _ in range(needed))
-                return candidate + (padding.upper() if orig.isupper() else padding.lower())
-
+        # Organization
         if label == "ORG":
-            for _ in range(50):
-                candidate = self.faker.company()
-                if orig.isupper():
-                    candidate = candidate.upper()
-                if len(candidate) == L:
-                    return candidate
-            if L <= 5:
-                return "".join(np.random.choice(list("ABCDEFGHIJKLMNOPQRSTUVWXYZ")) for _ in range(L))
-            
-            candidate = self.faker.company()
-            if orig.isupper():
-                candidate = candidate.upper()
-            if len(candidate) > L:
-                return candidate[:L]
-            else:
-                return candidate.ljust(L, "A")
+            companies = [
+                "INFOSYS TECH", "TATA CONSULTANCY", "WIPRO ENTERPRISES", "RELIANCE DIGITAL",
+                "BHARTI AIRTEL", "HDFC HOLDINGS", "ICICI SECURITIES", "MAHINDRA TECH",
+            ]
+            orig_word_count = len(orig.split())
+            matching = [c for c in companies if len(c.split()) == orig_word_count]
+            chosen = str(np.random.choice(matching)) if matching else companies[0]
+            return chosen.upper() if orig.isupper() else chosen
 
-        if label == "DOB":
-            return self.faker.date(pattern="%d/%m/%Y")[:L]
-
+        # Address / Location: line-by-line realistic replacement
         if label in {"ADDRESS", "GPE", "STREET_ADDRESS", "LOCATION"}:
-            # Alphanumeric codes or short strings detected as GPE should be format-preserved
-            has_letters = any(c.isalpha() for c in orig)
-            has_digits = any(c.isdigit() for c in orig)
-            if (has_letters and has_digits) or L < 20:
-                return format_preserve(orig)
-            
-            for _ in range(30):
-                candidate = self.faker.address().replace("\n", ", ")
-                if len(candidate) == L:
-                    return candidate
-            candidate = self.faker.address().replace("\n", ", ")
-            if len(candidate) > L:
-                return candidate[:L]
-            else:
-                return candidate.ljust(L, " ")
+            orig_lower = orig.lower()
 
-        if label == "LICENSE":
-            return self.faker.bothify("??## #### #######", letters="ABCDEFGHIJKLMNOPQRSTUVWXYZ")[:L]
+            # 1. House / Flat / Door number (e.g. #19, 019, Flat 204)
+            if re.search(r"^[#\d/]|(flat|door|plot|no\.)", orig_lower) and L <= 12:
+                nums = ["#42", "#28", "#15", "Flat 104", "No. 36", "Plot 18"]
+                return sorted(nums, key=lambda n: abs(len(n) - L))[0]
 
-        if label == "ROLL_NUMBER":
-            return format_preserve(orig)
+            # 2. State + PIN code line (e.g. Karnataka 560075)
+            if re.search(r"\b\d{6}\b", orig):
+                state_pins = [
+                    "Karnataka 560038", "Karnataka 560102", "Karnataka 560003",
+                    "Maharashtra 400050", "Telangana 500034", "Tamil Nadu 600028"
+                ]
+                chosen = sorted(state_pins, key=lambda p: abs(len(p) - L))[0]
+                return chosen.upper() if orig.isupper() else chosen
 
+            # 3. Street / Road line (e.g. 10th Main 13th Cross)
+            if any(k in orig_lower for k in ["main", "cross", "road", "street", "rd", "st"]):
+                streets = [
+                    "4th Cross, 8th Main Road", "12th Main, 5th Cross",
+                    "7th Cross, 2nd Stage", "3rd Main, 4th Block",
+                    "MG Road, 6th Cross", "15th Cross Road"
+                ]
+                chosen = sorted(streets, key=lambda s: abs(len(s) - L))[0]
+                return chosen.upper() if orig.isupper() else chosen
+
+            # 4. Locality / Sub-district (e.g. Maruthi Nagar, Bangalore North)
+            if any(k in orig_lower for k in ["nagar", "layout", "colony", "enclave", "north", "south", "east", "west"]):
+                localities = [
+                    "Indiranagar", "HSR Layout", "Koramangala", "Jayanagar",
+                    "Bengaluru East", "Bengaluru South", "Whitefield", "BTM Layout"
+                ]
+                chosen = sorted(localities, key=lambda loc: abs(len(loc) - L))[0]
+                return chosen.upper() if orig.isupper() else chosen
+
+            # 5. Short city / place name (<= 15 chars)
+            if L <= 15:
+                cities = ["Bengaluru", "Hyderabad", "Mysuru", "Chennai", "Pune", "Mumbai", "Mangaluru"]
+                chosen = sorted(cities, key=lambda c: abs(len(c) - L))[0]
+                return chosen.upper() if orig.isupper() else chosen
+
+            # 6. Full area / longer address line
+            longer_areas = [
+                "Old Airport Road, Kodihalli, Bengaluru",
+                "Outer Ring Road, Bellandur, Bengaluru",
+                "Intermediate Ring Road, Domlur, Bengaluru",
+                "Bannerghatta Main Road, Bengaluru"
+            ]
+            chosen = sorted(longer_areas, key=lambda a: abs(len(a) - L))[0]
+            return chosen.upper() if orig.isupper() else chosen
+
+        # Phone number
+        if label in {"PHONE", "PHONE_NUMBER"}:
+            p1 = np.random.randint(7, 10)
+            p2 = np.random.randint(100000000, 999999999)
+            d = f"{p1}{p2}"
+            if orig.startswith("+91"):
+                return f"+91 {d[:5]} {d[5:]}"
+            return d
+
+        # Email
+        if label in {"EMAIL", "EMAIL_ADDRESS"}:
+            domains = ["gmail.com", "outlook.com", "yahoo.com"]
+            dom = np.random.choice(domains)
+            return f"user.{np.random.randint(100, 999)}@{dom}"
+
+        # General numbers
         if label in {"NUMBERS", "CARDINAL"}:
             return "".join(str(np.random.randint(0, 10)) for _ in range(L))
 
-        if label in {"EMAIL", "EMAIL_ADDRESS"}:
-            for _ in range(30):
-                candidate = self.faker.email()
-                if len(candidate) == L:
-                    return candidate
-            return self.faker.email()[:L]
+        # Default fallback: preserve character format
+        chars = []
+        for c in orig:
+            if c.isupper():
+                chars.append(np.random.choice(list("ABCDEFGHIJKLMNOPQRSTUVWXYZ")))
+            elif c.islower():
+                chars.append(np.random.choice(list("abcdefghijklmnopqrstuvwxyz")))
+            elif c.isdigit():
+                chars.append(str(np.random.randint(0, 10)))
+            else:
+                chars.append(c)
+        return "".join(chars)
 
-        if label in {"PHONE", "PHONE_NUMBER"}:
-            for _ in range(30):
-                candidate = self.faker.phone_number()
-                if len(candidate) == L:
-                    return candidate
-            return self.faker.phone_number()[:L]
-
-        return format_preserve(orig)
 
     # ------------------------------------------------------------------
     # Color matching helper

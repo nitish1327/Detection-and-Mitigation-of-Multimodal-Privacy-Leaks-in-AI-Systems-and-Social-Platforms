@@ -77,6 +77,10 @@ const originalImageFrame = document.getElementById("original-image-frame");
 const sanitizedImageFrame = document.getElementById("sanitized-image-frame");
 const imageEntitiesList = document.getElementById("image-entities-list");
 const imageNoEntities = document.getElementById("image-no-entities");
+const imageEntitySelectionControls = document.getElementById("image-entity-selection-controls");
+const imageSelectAllEntitiesBtn = document.getElementById("image-select-all-entities-btn");
+const imageClearAllEntitiesBtn = document.getElementById("image-clear-all-entities-btn");
+const imageApplyMitigationBtn = document.getElementById("image-apply-mitigation-btn");
 const downloadBtn = document.getElementById("download-btn");
 const imageClearBtn = document.getElementById("image-clear-btn");
 const imageExpandBtn = document.getElementById("image-expand-btn");
@@ -145,6 +149,8 @@ let originalImageUrl = null;
 let sanitizedImageUrl = null;
 let sanitizedImageBlob = null;
 let sanitizedDownloadName = "sanitized.png";
+let imageDetectedEntities = [];
+let selectedImageEntityTypes = new Set();
 
 let selectedAudioFile = null;
 let sanitizedAudioUrl = null;
@@ -883,6 +889,15 @@ function initImageTab() {
   if (imageExpandBtn) {
     imageExpandBtn.addEventListener("click", handleImageExpand);
   }
+  if (imageSelectAllEntitiesBtn) {
+    imageSelectAllEntitiesBtn.addEventListener("click", () => setAllImageEntityTypesSelected(true));
+  }
+  if (imageClearAllEntitiesBtn) {
+    imageClearAllEntitiesBtn.addEventListener("click", () => setAllImageEntityTypesSelected(false));
+  }
+  if (imageApplyMitigationBtn) {
+    imageApplyMitigationBtn.addEventListener("click", handleApplyImageMitigation);
+  }
   if (originalImageFrame) {
     originalImageFrame.addEventListener("click", () => {
       if (originalImageUrl) {
@@ -942,7 +957,11 @@ function initImageTab() {
       }
 
       if (saved.entities && saved.entities.length) {
-        renderEntityList(imageEntitiesList, imageNoEntities, saved.entities);
+        imageDetectedEntities = saved.entities;
+        selectedImageEntityTypes = new Set(
+          saved.selectedTypes || imageDetectedEntities.map((e) => (typeof e === "string" ? e.toUpperCase() : String(e.label).toUpperCase()))
+        );
+        renderSelectableImageEntities();
       }
 
       imagePreviewPanel.classList.remove("hidden");
@@ -978,6 +997,11 @@ function handleImageClear() {
   sanitizedImageEl.classList.add("hidden");
   originalImageEl.removeAttribute("src");
   sanitizedImageEl.removeAttribute("src");
+  imageDetectedEntities = [];
+  selectedImageEntityTypes = new Set();
+  if (imageEntitiesList) imageEntitiesList.innerHTML = "";
+  if (imageEntitySelectionControls) imageEntitySelectionControls.classList.add("hidden");
+  if (imageApplyMitigationBtn) imageApplyMitigationBtn.disabled = true;
   clearError();
 }
 
@@ -1039,6 +1063,9 @@ async function handleImageSanitize() {
   imageSanitizeBtn.textContent = "Sanitizing…";
   imageSanitizeBtn.disabled = true;
   downloadBtn.disabled = true;
+  if (imageApplyMitigationBtn) {
+    imageApplyMitigationBtn.disabled = true;
+  }
 
   try {
     const result = await sanitizeImage(selectedImageFile);
@@ -1058,12 +1085,11 @@ async function handleImageSanitize() {
     const ext = guessExtensionFromBlob(blob) || ".png";
     sanitizedDownloadName = `${stem}.sanitized${ext}`;
 
-    const labels = result.redacted_entities || extractEntityLabels(result.entities);
-    renderEntityList(
-      imageEntitiesList,
-      imageNoEntities,
-      labels
+    imageDetectedEntities = Array.isArray(result.entities) ? result.entities : [];
+    selectedImageEntityTypes = new Set(
+      imageDetectedEntities.map((entity) => String(entity.label).toUpperCase())
     );
+    renderSelectableImageEntities();
 
     // Save state to IndexedDB so reopening extension preserves image + download
     void saveImageSession({
@@ -1072,7 +1098,8 @@ async function handleImageSanitize() {
       downloadName: sanitizedDownloadName,
       originalBlob: selectedImageFile,
       sanitizedBlob: blob,
-      entities: labels,
+      entities: imageDetectedEntities,
+      selectedTypes: [...selectedImageEntityTypes],
     });
 
     imagePreviewPanel.classList.remove("hidden");
@@ -1085,12 +1112,127 @@ async function handleImageSanitize() {
     imageSanitizeBtn.classList.remove("loading");
     imageSanitizeBtn.textContent = "Sanitize Image";
     imageSanitizeBtn.disabled = !selectedImageFile;
+    if (imageApplyMitigationBtn) {
+      imageApplyMitigationBtn.disabled = imageDetectedEntities.length === 0;
+    }
   }
 }
 
-async function sanitizeImage(file) {
+async function handleApplyImageMitigation() {
+  if (!selectedImageFile) {
+    showError("Select an image to sanitize.");
+    return;
+  }
+
+  clearError();
+  if (imageApplyMitigationBtn) {
+    imageApplyMitigationBtn.disabled = true;
+    imageApplyMitigationBtn.classList.add("loading");
+    imageApplyMitigationBtn.textContent = "Applying…";
+  }
+  downloadBtn.disabled = true;
+
+  try {
+    const result = await sanitizeImage(selectedImageFile, {
+      selected_entity_types: [...selectedImageEntityTypes],
+    });
+    const blob = await resolveSanitizedImageBlob(result);
+    if (sanitizedImageUrl) {
+      URL.revokeObjectURL(sanitizedImageUrl);
+    }
+    sanitizedImageBlob = blob;
+    sanitizedImageUrl = URL.createObjectURL(blob);
+    sanitizedImageEl.src = sanitizedImageUrl;
+    sanitizedImageEl.classList.remove("hidden");
+    if (sanitizedPlaceholder) {
+      sanitizedPlaceholder.classList.add("hidden");
+    }
+
+    const stem = selectedImageFile.name.replace(/\.[^.]+$/, "");
+    const ext = guessExtensionFromBlob(blob) || ".png";
+    sanitizedDownloadName = `${stem}.sanitized${ext}`;
+
+    if (Array.isArray(result.entities) && result.entities.length > 0) {
+      imageDetectedEntities = result.entities;
+    }
+    renderSelectableImageEntities();
+
+    void saveImageSession({
+      filename: selectedImageFile.name,
+      fileType: selectedImageFile.type,
+      downloadName: sanitizedDownloadName,
+      originalBlob: selectedImageFile,
+      sanitizedBlob: blob,
+      entities: imageDetectedEntities,
+      selectedTypes: [...selectedImageEntityTypes],
+    });
+
+    imagePreviewPanel.classList.remove("hidden");
+    downloadBtn.disabled = false;
+    setBackendStatus("ok");
+  } catch (error) {
+    showError(error.message);
+    setBackendStatus("error");
+  } finally {
+    if (imageApplyMitigationBtn) {
+      imageApplyMitigationBtn.disabled = imageDetectedEntities.length === 0;
+      imageApplyMitigationBtn.classList.remove("loading");
+      imageApplyMitigationBtn.textContent = "Apply Mitigation";
+    }
+  }
+}
+
+function setAllImageEntityTypesSelected(selected) {
+  const types = new Set(imageDetectedEntities.map((entity) => String(entity.label).toUpperCase()));
+  selectedImageEntityTypes = selected ? types : new Set();
+  renderSelectableImageEntities();
+}
+
+function renderSelectableImageEntities() {
+  if (!imageEntitiesList) return;
+  imageEntitiesList.innerHTML = "";
+  const types = [...new Set(imageDetectedEntities.map((entity) => String(entity.label).toUpperCase()))];
+  if (types.length === 0) {
+    if (imageNoEntities) imageNoEntities.classList.remove("hidden");
+    if (imageEntitySelectionControls) imageEntitySelectionControls.classList.add("hidden");
+    if (imageApplyMitigationBtn) imageApplyMitigationBtn.disabled = true;
+    return;
+  }
+
+  if (imageNoEntities) imageNoEntities.classList.add("hidden");
+  if (imageEntitySelectionControls) imageEntitySelectionControls.classList.remove("hidden");
+  if (imageApplyMitigationBtn) imageApplyMitigationBtn.disabled = false;
+
+  types.forEach((type) => {
+    const item = document.createElement("li");
+    item.className = "entity-choice-item";
+    const label = document.createElement("label");
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = selectedImageEntityTypes.has(type);
+    checkbox.dataset.entityType = type;
+    checkbox.addEventListener("change", () => {
+      if (checkbox.checked) selectedImageEntityTypes.add(type);
+      else selectedImageEntityTypes.delete(type);
+    });
+    const name = document.createElement("span");
+    name.textContent = displayEntityType(type);
+    label.className = "entity-option";
+    label.append(checkbox, name);
+    item.appendChild(label);
+    imageEntitiesList.appendChild(item);
+  });
+}
+
+async function sanitizeImage(file, options = {}) {
   const formData = new FormData();
   formData.append("file", file, file.name);
+  if (options.selected_entity_types) {
+    formData.append("selected_entity_types", JSON.stringify(options.selected_entity_types));
+  }
+  if (options.detect_only) {
+    formData.append("detect_only", "true");
+  }
 
   const response = await fetchWithTimeout(
     IMAGE_UPLOAD_ENDPOINT,

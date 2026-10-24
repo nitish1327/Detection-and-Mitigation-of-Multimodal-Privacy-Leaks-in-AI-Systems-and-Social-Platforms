@@ -335,13 +335,31 @@ class PipelineManager:
         path: Path,
         output_path: Path | None = None,
         entities_override: list[DetectedEntity] | None = None,
+        selected_entity_types: set[str] | list[str] | None = None,
     ) -> DetectionResult:
         source_path = Path(path)
         LOGGER.info("Processing image: %s", source_path.name)
         entities = entities_override if entities_override is not None else self.image_detector.detect(source_path)
+
+        if selected_entity_types is not None:
+            selected_set = {str(s).strip().upper() for s in selected_entity_types}
+            entities_to_mitigate = [
+                e for e in entities if str(e.label).strip().upper() in selected_set
+            ]
+            unselected_entities = [
+                e.model_copy(update={"mitigation": "none"})
+                for e in entities
+                if str(e.label).strip().upper() not in selected_set
+            ]
+        else:
+            entities_to_mitigate = entities
+            unselected_entities = []
+
         final_output = output_path or self._output_path(source_path, suffix=f".sanitized{source_path.suffix}")
         ensure_dir(final_output)
-        mitigated_path, mitigated_entities = self.image_mitigator.mitigate(source_path, entities, final_output)
+        mitigated_path, mitigated_entities = self.image_mitigator.mitigate(source_path, entities_to_mitigate, final_output)
+        all_returned_entities = mitigated_entities + unselected_entities
+
         artifacts = []
         if self.config.explainability.save_image_overlays and mitigated_entities:
             overlay_path = final_output.with_suffix(".overlay.png")
@@ -350,7 +368,7 @@ class PipelineManager:
         result = DetectionResult(
             source_path=source_path,
             modality=Modality.IMAGE,
-            entities=mitigated_entities,
+            entities=all_returned_entities,
             mitigated_output=mitigated_path,
             artifacts=artifacts,
             runtime_metadata={"detection_mode": self.text_detector.detection_mode},

@@ -333,7 +333,8 @@ textarea:focus {
   font-size: 11px;
 }
 
-#apply-mitigation-btn {
+#apply-mitigation-btn,
+#image-apply-mitigation-btn {
   margin-top: 0;
 }
 

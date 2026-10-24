@@ -28,41 +28,72 @@ else:  # pragma: no cover
     EasyOcrReader = None  # type: ignore
 
 
-# Document field labels that are structural text, NOT PII values.
+# Document field labels, headers, and issuers that are structural text, NOT PII values.
 # These should never be mitigated — only the values beside them are sensitive.
 _DOCUMENT_FIELD_LABELS = {
-    # Common ID / driving license fields
+    # Issuing authorities & document headers
+    "government of india", "govt of india", "govt. of india", "gov of india", "government",
+    "goverment of india", "goverment",
+    "unique identification authority of india", "unique identification authority", "uidai",
+    "identification authority of india", "identification authority",
+    "government of fictional territory", "fictional territory",
+    "income tax department", "income tax dept", "dept of income tax", "department of income tax",
+    "aaykar vibhag", "aaykar", "incometax",
+    "election commission of india", "election commission",
+    "transport department", "motor vehicles department",
+    "indian union driving license", "union driving license",
+    "driving license", "driver license", "driving licence", "driver licence",
+    "permanent account number card", "permanent account number", "pan card",
+    "elector photo identity card", "elactor photo identity card", "photo identity card", "identity card", "elector", "elector photo",
+    "voter id", "voter identity card",
+    "pes university", "pes institute of technology", "pes", "university",
+    "bharat sarkar", "bharat",
+    
+    # Common ID / driving license / card field labels
     "name", "full name", "surname", "first name", "last name",
-    "license no", "license no.", "licence no", "licence no.",
-    "license number", "licence number", "dl no", "dl no.",
-    "authorization to drive", "auth to drive",
+    "license no", "license no.", "license no_", "licence no", "licence no.", "license number", "licence number", "dl no", "dl no.",
+    "authorization to drive", "auth to drive", "to drive", "class of vehicle", "cov",
     "date of issue", "doi", "issue date",
-    "date of expiry", "doe", "expiry date", "valid till", "valid upto",
-    "dob", "date of birth", "d.o.b", "d.o.b.",
-    "s/w/d", "s/d/w", "s/o", "d/o", "w/o", "c/o",
+    "date of expiry", "doe", "expiry date", "valid till", "valid upto", "validity",
+    "dob", "date of birth", "d.o.b", "d.o.b.", "birth date",
+    "s/w/d", "s/d/w", "s/o", "d/o", "w/o", "c/o", "son of", "daughter of", "wife of", "care of", "siwid",
+    "father's name", "fathers name", "mother's name", "mothers name", "husband's name", "husbands name",
     "blood group", "blood grp", "bg",
-    "sex", "gender",
-    "permanent address", "present address", "address",
+    "sex", "gender", "male", "female", "transgender",
+    "permanent address", "present address", "address", "res. address", "residential address",
     "place of issue", "issuing authority", "issued by",
     "nationality", "country",
-    "signature", "photograph", "photo",
-    "father's name", "fathers name", "husband's name", "husbands name",
-    "mother's name", "mothers name",
-    # Aadhaar specific
-    "aadhaar", "aadhaar no", "aadhaar number", "uid", "vid",
-    "government of india", "govt of india",
-    "unique identification authority",
-    # Passport fields
+    "signature", "specimen signature", "holder's signature", "photograph", "photo", "sign",
+    "enrolment no", "enrolment number", "enrollment no", "enrollment number",
+    "enrollront no", "enrollront number", "enrollront",
+    "aadhaar no", "aadhaar number", "your aadhaar no", "your aadhaar number", "your aadhaar no.", "aadhaar",
+    "uid", "vid",
     "passport no", "passport number",
-    "place of birth", "place of issue",
-    # PAN
+    "place of birth",
     "pan", "pan no", "pan number",
-    "income tax department",
-    # Generic document structure
     "sr no", "sr no.", "serial no", "serial number",
     "reg no", "reg no.", "registration no",
-    "class of vehicle", "cov", "type of vehicle",
+    "roll no", "roll number", "prn", "usn",
     "transport", "non-transport", "non transport",
+    "to", "to,", "to:", "ref", "ref:", "rel", "rel:",
+
+    # Common Document Boilerplate / Instructions
+    "this card is for identification purposes only",
+    "it is not a proof of citizenship",
+    "for identification purposes only",
+    "not a proof of citizenship",
+    "identification purposes only",
+    "terms of use", "instructions",
+    "tap to zoom", "to zoom",
+    "signature valid", "digitally signed", "valid",
+    "mera aadhaar meri pehchan", "nanna aadhaar nanna gurutu",
+    "lmv,mcwg", "mcwg", "lmv", "nt", "tr", "unknown",
+    # Single structural words commonly isolated by OCR in document headers/fields
+    "government", "goverment", "fictional", "territory", "authority", "unique", "identification",
+    "republic", "state", "department", "transport", "card", "permanent", "account",
+    "driving", "license", "licence", "union", "expiry", "issue", "birth", "elector", "elactor",
+    "election", "commission", "income", "tax", "pes", "university", "technology", "institute", "ministry",
+    "citizenship", "citizen", "citizens", "proof", "purposes",
 }
 LOGGER = get_logger(__name__)
 
@@ -174,6 +205,7 @@ class ImageDetector:
 
         # OCR + MRZ
         all_ocr_text = ""
+        ocr_results = []
         if self.config.enable_ocr:
             ocr_results = self._get_ocr_results(image)
             all_ocr_text = " ".join([r[1] for r in ocr_results])
@@ -191,7 +223,7 @@ class ImageDetector:
             elif "d/o" in ocr_lower or "w/o" in ocr_lower or "daughter of" in ocr_lower or "wife of" in ocr_lower:
                 detected_gender = "female"
                 
-            entities.extend(self._process_ocr_results(ocr_results, detected_gender))
+            entities.extend(self._process_ocr_results(ocr_results, detected_gender, image_shape=image.shape))
             
             if self.config.enable_mrz:
                 entities.extend(self._detect_mrz(ocr_results))
@@ -203,12 +235,16 @@ class ImageDetector:
                 face.metadata["gender"] = detected_gender
         entities.extend(face_entities)
                 
-        entities.extend(self._detect_id_card_by_color(image))
-        entities.extend(self._detect_text_multirotation(image))
+        # Only run id_card_by_color and multi-rotation OCR if normal OCR found little to no text
+        has_ocr_text = bool(ocr_results and len(ocr_results) >= 2)
+        if not has_ocr_text:
+            entities.extend(self._detect_id_card_by_color(image))
+            entities.extend(self._detect_text_multirotation(image))
 
         # Barcode Detection (1D and 2D barcodes)
         if getattr(self.config, "enable_barcode", True):
-            entities.extend(self._detect_barcodes(image))
+            ocr_res = ocr_results if self.config.enable_ocr else None
+            entities.extend(self._detect_barcodes(image, ocr_results=ocr_res))
 
         # License Plate Detection
         if getattr(self.config, "enable_license_plate", True):
@@ -301,50 +337,425 @@ class ImageDetector:
 
     @staticmethod
     def _is_field_label(text: str) -> bool:
-        """Return True if the OCR text is a document field label, not a PII value."""
+        """Return True if the OCR text is document structure, header, issuer, or template label."""
+        if not text:
+            return True
         cleaned = text.strip().lower()
-        # Remove trailing colons/dashes that are common on labels
         cleaned = cleaned.rstrip(":- .")
-        return cleaned in _DOCUMENT_FIELD_LABELS
+        if not cleaned:
+            return True
+        # If the text contains an actual ID number (like 2189/42082/02898) or Aadhaar number, it has sensitive value
+        if re.search(r"\b\d{4}/\d{5}/\d{5}\b", cleaned) or re.search(r"\b\d{4}\s\d{4}\s\d{4}\b", cleaned):
+            return False
+        if cleaned in _DOCUMENT_FIELD_LABELS:
+            return True
+        if any(cleaned.startswith(p) for p in ["signatur", "signature", "photograph", "photo"]):
+            return True
+        if cleaned in {"vid", "mid", "uid", "vid:", "mid:", "uid:"}:
+            return True
+        for term in _DOCUMENT_FIELD_LABELS:
+            if " " in term and term in cleaned:
+                return True
+        words = cleaned.split()
+        if len(words) <= 4 and all(w in _DOCUMENT_FIELD_LABELS for w in words):
+            return True
+        return False
 
-    def _process_ocr_results(self, ocr_results: List[Tuple[Sequence[Tuple[float, float]], str, float]], detected_gender: str | None = None) -> List[DetectedEntity]:
+    def _process_ocr_results(
+        self,
+        ocr_results: List[Tuple[Sequence[Tuple[float, float]], str, float]],
+        detected_gender: str | None = None,
+        image_shape: tuple[int, ...] | None = None,
+    ) -> List[DetectedEntity]:
         """Convert OCR results into DetectedEntity objects, routing via TextDetector.
 
-        Field labels (e.g. "NAME", "License No.", "DOB") are skipped so that
-        only the actual PII values beside them are mitigated.
+        Field labels and document headers are skipped so that only actual
+        sensitive PII values beside them are mitigated.
         """
         results: list[DetectedEntity] = []
+        valid_items: list[tuple[Sequence[Tuple[float, float]], str, float, BoundingBox]] = []
+        img_h = image_shape[0] if image_shape else None
+
+        # Horizontal same-line token grouping: join words on the same line that OCR split apart
+        if ocr_results:
+            raw_entries = []
+            for pts, txt, conf in ocr_results:
+                cleaned = txt.strip()
+                if not cleaned:
+                    continue
+                xs = [p[0] for p in pts]
+                ys = [p[1] for p in pts]
+                raw_entries.append({
+                    "pts": pts, "txt": cleaned, "conf": float(conf),
+                    "x": min(xs), "y": min(ys),
+                    "w": max(xs) - min(xs), "h": max(ys) - min(ys),
+                })
+            raw_entries.sort(key=lambda e: (e["y"], e["x"]))
+            merged_ocr = []
+            used_raw = set()
+            for i, e1 in enumerate(raw_entries):
+                if i in used_raw:
+                    continue
+                if e1["h"] > e1["w"] * 2.5:
+                    merged_ocr.append((e1["pts"], e1["txt"], e1["conf"]))
+                    used_raw.add(i)
+                    continue
+
+                line_tokens = [e1]
+                used_raw.add(i)
+                for j, e2 in enumerate(raw_entries):
+                    if j in used_raw or e2["h"] > e2["w"] * 2.5:
+                        continue
+                    if max(e1["h"], e2["h"]) / max(1, min(e1["h"], e2["h"])) > 1.6:
+                        continue
+                    y_overlap = min(e1["y"] + e1["h"], e2["y"] + e2["h"]) - max(e1["y"], e2["y"])
+                    min_h = min(e1["h"], e2["h"])
+                    if min_h > 0 and (y_overlap / min_h) > 0.45:
+                        x_gap = max(0, max(e1["x"], e2["x"]) - min(e1["x"] + e1["w"], e2["x"] + e2["w"]))
+                        if x_gap <= max(e1["h"], e2["h"]) * 2.0:
+                            line_tokens.append(e2)
+                            used_raw.add(j)
+
+                line_tokens.sort(key=lambda t: t["x"])
+                merged_txt = " ".join(t["txt"] for t in line_tokens)
+                min_x = min(t["x"] for t in line_tokens)
+                max_x = max(t["x"] + t["w"] for t in line_tokens)
+                min_y = min(t["y"] for t in line_tokens)
+                max_y = max(t["y"] + t["h"] for t in line_tokens)
+                avg_conf = sum(t["conf"] for t in line_tokens) / len(line_tokens)
+                merged_pts = [(min_x, min_y), (max_x, min_y), (max_x, max_y), (min_x, max_y)]
+                merged_ocr.append((merged_pts, merged_txt, avg_conf))
+
+            ocr_results = merged_ocr
+
         for bbox_points, text, confidence in ocr_results:
             if confidence < self.config.min_confidence:
                 continue
+            cleaned = text.strip()
+            if not cleaned or len(cleaned) < 2:
+                continue
+            if self._is_field_label(cleaned):
+                continue
+            bbox = self._bbox_from_points(bbox_points)
+            valid_items.append((bbox_points, cleaned, float(confidence), bbox))
 
-            # Skip structural document field labels — they are NOT PII
-            if self._is_field_label(text):
+        mit_style = "replace" if self.config.default_style in {"synthetic", "replace"} else ("blur" if self.config.default_style == "blur" else "mask")
+
+        # Collect address and signature labels from all OCR results
+        addr_labels = [
+            self._bbox_from_points(pts)
+            for pts, txt, conf in ocr_results
+            if any(al in txt.lower().rstrip(":- .") for al in ["address", "permanent address", "present address", "res. address", "to,", "to"])
+        ]
+        sig_label_boxes = [
+            self._bbox_from_points(pts)
+            for pts, txt, conf in ocr_results
+            if any(st in txt.lower() for st in ["signature", "हस्ताक्षर", "sign"])
+        ]
+
+        # Multi-token Aadhaar numbers: e.g. "9876", "5432", "1011"
+        used_indices: set[int] = set()
+        four_digit_items = [
+            (idx, item) for idx, item in enumerate(valid_items)
+            if re.fullmatch(r"\d{4}", item[1].strip())
+        ]
+        for i in range(len(four_digit_items)):
+            if four_digit_items[i][0] in used_indices:
+                continue
+            idx1, item1 = four_digit_items[i]
+            box1 = item1[3]
+            group = [(idx1, item1)]
+            for j in range(i + 1, len(four_digit_items)):
+                idx2, item2 = four_digit_items[j]
+                if idx2 in used_indices:
+                    continue
+                box2 = item2[3]
+                y_diff = abs((box1.y + box1.height / 2) - (box2.y + box2.height / 2))
+                x_gap = abs(box2.x - (box1.x + box1.width))
+                if y_diff < max(box1.height, box2.height) * 1.5 and x_gap < max(box1.width, box2.width) * 3.0:
+                    group.append((idx2, item2))
+            if len(group) == 3:
+                group.sort(key=lambda g: g[1][3].x)
+                merged_text = f"{group[0][1][1]} {group[1][1][1]} {group[2][1][1]}"
+                min_x = min(g[1][3].x for g in group)
+                min_y = min(g[1][3].y for g in group)
+                max_x2 = max(g[1][3].x + g[1][3].width for g in group)
+                max_y2 = max(g[1][3].y + g[1][3].height for g in group)
+                merged_bbox = BoundingBox(x=min_x, y=min_y, width=max_x2 - min_x, height=max_y2 - min_y)
+                avg_conf = sum(g[1][2] for g in group) / 3.0
+                results.append(
+                    DetectedEntity(
+                        modality=Modality.IMAGE,
+                        label="AADHAR",
+                        text=merged_text,
+                        confidence=avg_conf,
+                        bbox=merged_bbox,
+                        mitigation=mit_style,
+                        detection_method="pattern",
+                    )
+                )
+                for g_idx, _ in group:
+                    used_indices.add(g_idx)
+
+        # Process remaining items
+        for idx, (bbox_points, text, confidence, bbox) in enumerate(valid_items):
+            if idx in used_indices:
                 continue
 
-            bbox = self._bbox_from_points(bbox_points)
-            nested_entities = self._text_detector.detect(text) if self._text_detector else []
+            clean_lower = text.lower().strip()
+
+            # Filter out orphan single-digit noise or short fragmented numbers
+            if len(text.strip()) <= 2 and not text.strip().isalpha():
+                continue
+            if text.strip().isdigit() and len(text.strip()) <= 3 and not re.search(r"\b(19|20)\d{2}\b", text):
+                continue
+
+            # Direct Aadhaar match: "9006 2534 7320"
+            if re.search(r"\b\d{4}\s\d{4}\s\d{4}\b", text):
+                results.append(
+                    DetectedEntity(
+                        modality=Modality.IMAGE,
+                        label="AADHAR",
+                        text=text,
+                        confidence=confidence,
+                        bbox=bbox,
+                        mitigation=mit_style,
+                        detection_method="regex",
+                    )
+                )
+                continue
+
+            # Date of Birth match: "05/02/1985", "2004-07-15", "25/05/2004"
+            if re.search(r"\b(\d{2}[/-]\d{2}[/-]\d{4}|\d{4}[/-]\d{2}[/-]\d{2})\b", text):
+                results.append(
+                    DetectedEntity(
+                        modality=Modality.IMAGE,
+                        label="DOB",
+                        text=text,
+                        confidence=confidence,
+                        bbox=bbox,
+                        mitigation=mit_style,
+                        detection_method="regex",
+                    )
+                )
+                continue
+
+            # 10-digit Phone number match (e.g. 9945145618)
+            if re.search(r"\b[6-9]\d{9}\b", text):
+                results.append(
+                    DetectedEntity(
+                        modality=Modality.IMAGE,
+                        label="PHONE",
+                        text=text,
+                        confidence=confidence,
+                        bbox=bbox,
+                        mitigation=mit_style,
+                        detection_method="regex",
+                    )
+                )
+                continue
+
+            # Enrollment number match: "2189/42082/02898" or "Enrollment No ..."
+            if re.search(r"\b\d{4}/\d{5}/\d{5}\b", text) or any(k in clean_lower for k in ["enroll", "enrol", "enrollront"]):
+                results.append(
+                    DetectedEntity(
+                        modality=Modality.IMAGE,
+                        label="id_number",
+                        text=text,
+                        confidence=confidence,
+                        bbox=bbox,
+                        mitigation=mit_style,
+                        detection_method="regex",
+                    )
+                )
+                continue
+
+            # ID / License / Roll / PAN number match
+            if ID_NUMBER_RE.search(text) or re.search(r"\b[A-Z]{2}[0-9O]{12,16}\b", text.replace(" ", "")) or re.search(r"\b[A-Z]{5}\d{4}[A-Z]\b", text):
+                results.append(
+                    DetectedEntity(
+                        modality=Modality.IMAGE,
+                        label="id_number",
+                        text=text,
+                        confidence=confidence,
+                        bbox=bbox,
+                        mitigation=mit_style,
+                        detection_method="regex",
+                    )
+                )
+                continue
+
+            # Address match: contains address keywords or PIN code
+            addr_keywords = {
+                "street", "road", "nagar", "apartments", "apartment", "flat", "door", "plot",
+                "cross", "layout", "district", "pradesh", "karnataka", "dubai", "emirates",
+                "near", "sector", "phase", "main", "stage", "block", "colony", "enclave",
+                "north", "south", "east", "west", "bengaluru", "bangalore", "mumbai", "delhi",
+                "hyderabad", "chennai", "pune", "mysuru", "thippasandra", "taluk", "post", "opp", "behind"
+            }
+            if any(ak in clean_lower for ak in addr_keywords) or re.search(r"\b\d{6}\b", text):
+                results.append(
+                    DetectedEntity(
+                        modality=Modality.IMAGE,
+                        label="address",
+                        text=text,
+                        confidence=confidence,
+                        bbox=bbox,
+                        mitigation=mit_style,
+                        detection_method="pattern",
+                    )
+                )
+                continue
+
+            # Care of / Guardian / Relative prefix: S/O, D/O, W/O, C/O
+            if re.search(r"\b(s/o|d/o|w/o|c/o|son of|daughter of|wife of)\b", clean_lower):
+                metadata = {}
+                if detected_gender:
+                    metadata["gender"] = detected_gender
+                results.append(
+                    DetectedEntity(
+                        modality=Modality.IMAGE,
+                        label="person_name",
+                        text=text,
+                        confidence=confidence,
+                        bbox=bbox,
+                        mitigation=mit_style,
+                        detection_method="pattern",
+                        metadata=metadata,
+                    )
+                )
+                continue
+
+            # Address field zone match: all lines directly below/beside an address or "To," label
+            in_address_zone = False
+            for alb in addr_labels:
+                if alb.y - 10 <= bbox.y <= alb.y + 220 and bbox.x >= alb.x - 40:
+                    if not re.search(r"\b\d{4}\s\d{4}\s\d{4}\b", text) and not re.fullmatch(r"\d{4}", text) and not re.search(r"\b\d{2}[/-]\d{2}[/-]\d{4}\b", text):
+                        if not any(discl in text.lower() for discl in ["citizen", "proof", "terms", "instruction", "card is", "use", "only"]):
+                            if not self._is_field_label(text):
+                                in_address_zone = True
+                                break
+            if in_address_zone:
+                # If first line after To, and looks like a person name, mark as person_name; otherwise address
+                is_name = False
+                for alb in addr_labels:
+                    if 15 <= (bbox.y - alb.y) <= 60 and len(text.split()) <= 4:
+                        is_name = True
+                        break
+                lbl = "person_name" if is_name else "address"
+                metadata = {}
+                if detected_gender and lbl == "person_name":
+                    metadata["gender"] = detected_gender
+                results.append(
+                    DetectedEntity(
+                        modality=Modality.IMAGE,
+                        label=lbl,
+                        text=text,
+                        confidence=confidence,
+                        bbox=bbox,
+                        mitigation=mit_style,
+                        detection_method="pattern",
+                        metadata=metadata,
+                    )
+                )
+                continue
+
+            # Next, route through TextDetector (normalizing common OCR letter confusions in names e.g. 5 -> S)
+            text_norm = re.sub(r"\b5\b", "S", re.sub(r"\$+", "S", text))
+            nested_entities = self._text_detector.detect(text_norm) if self._text_detector else []
             if nested_entities:
                 for nested in nested_entities:
-                    # Also skip if the nested entity text itself is a label
                     if nested.text and self._is_field_label(nested.text):
                         continue
-
                     metadata = nested.metadata.copy()
                     if detected_gender and nested.label in {"PERSON", "NAME"}:
                         metadata["gender"] = detected_gender
+
+                    label = nested.label
+                    if label in {"ORG", "ORGANIZATION"} and (text.isupper() or len(text.split()) <= 3):
+                        if not any(k in clean_lower for k in INSTITUTION_KEYWORDS):
+                            label = "PERSON"
+
+                    # Top header shielding: text in the top 8% of an ID document is an institutional header banner
+                    if img_h and bbox.y < img_h * 0.08 and label in {"PERSON", "NAME", "person_name"}:
+                        continue
+
+                    # Signature zone shielding: text right above or near a signature label is handwritten signature, not a printed person name
+                    is_in_sig_zone = any(
+                        abs((bbox.x + bbox.width / 2) - (sb.x + sb.width / 2)) < max(bbox.width, sb.width) * 1.5
+                        and -90 <= (sb.y - (bbox.y + bbox.height)) <= 25
+                        for sb in sig_label_boxes
+                    )
+                    if not is_in_sig_zone and img_h and image_shape:
+                        img_w = image_shape[1]
+                        if bbox.y > img_h * 0.70 and bbox.x > img_w * 0.40 and (bbox.x + bbox.width) < img_w * 0.75:
+                            if not re.search(r"\b\d{2}[/-]\d{2}[/-]\d{4}\b", text):
+                                is_in_sig_zone = True
+
+                    if is_in_sig_zone and label in {"PERSON", "NAME", "person_name"}:
+                        continue
+
+                    # Low confidence filter for NLP entity routing to prevent background leaflet noise
+                    if confidence < 0.45 and label in {"PERSON", "NAME", "person_name", "ORG"}:
+                        continue
+
+                    # Skip standalone short numbers (1-4 digits) that are not part of an ID, PIN, or date
+                    if label in {"CARDINAL", "numbers"} and len(nested.text.strip()) <= 4:
+                        continue
 
                     results.append(
                         nested.model_copy(
                             update={
                                 "modality": Modality.IMAGE,
+                                "label": label,
                                 "bbox": bbox,
                                 "confidence": float(confidence),
                                 "metadata": metadata,
+                                "mitigation": mit_style,
                             }
                         )
                     )
-            # Removed fallback for 'scene_text' to avoid blurring non-sensitive text
+            elif 2 <= len(text.split()) <= 5:
+                # Top header shielding: text in the top 8% of an ID document is an institutional header banner
+                if img_h and bbox.y < img_h * 0.08:
+                    continue
+                # Signature zone shielding: text right above a signature label is handwritten signature, not a printed name
+                is_in_sig_zone = any(
+                    abs((bbox.x + bbox.width / 2) - (sb.x + sb.width / 2)) < max(bbox.width, sb.width) * 1.5
+                    and -90 <= (sb.y - (bbox.y + bbox.height)) <= 25
+                    for sb in sig_label_boxes
+                )
+                if not is_in_sig_zone and img_h and image_shape:
+                    img_w = image_shape[1]
+                    if bbox.y > img_h * 0.70 and bbox.x > img_w * 0.40 and (bbox.x + bbox.width) < img_w * 0.75:
+                        if not re.search(r"\b\d{2}[/-]\d{2}[/-]\d{4}\b", text):
+                            is_in_sig_zone = True
+
+                if is_in_sig_zone:
+                    continue
+                # Low confidence filter for pattern person names
+                if confidence < 0.45:
+                    continue
+                # Person name pattern: 2-5 words, capitalized, not geographic, not document structure
+                words = text.split()
+                alpha_words = [w for w in words if w.isalpha()]
+                if len(alpha_words) >= 2 and all(w[0].isupper() for w in alpha_words):
+                    if not self._is_geographic_text(text):
+                        metadata = {}
+                        if detected_gender:
+                            metadata["gender"] = detected_gender
+                        results.append(
+                            DetectedEntity(
+                                modality=Modality.IMAGE,
+                                label="person_name",
+                                text=text,
+                                confidence=confidence,
+                                bbox=bbox,
+                                mitigation=mit_style,
+                                detection_method="pattern",
+                                metadata=metadata,
+                            )
+                        )
         return results
 
     def _detect_qr(self, image: np.ndarray) -> Iterable[DetectedEntity]:
@@ -424,11 +835,51 @@ class ImageDetector:
                         # If we found something at this scale, keep looking for others but maybe skip this version
                         pass
 
+        # Fallback: High-density 2D matrix / secure Aadhaar QR code detection via texture & contour analysis
+        try:
+            img_h, img_w = gray.shape[:2]
+            img_area = img_h * img_w
+            val, otsu = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
+            closed = cv2.morphologyEx(otsu, cv2.MORPH_CLOSE, kernel)
+            contours, _ = cv2.findContours(closed, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+
+            for c in contours:
+                x, y, w, h = cv2.boundingRect(c)
+                aspect = w / float(h) if h > 0 else 0
+                area = w * h
+                # QR codes are square (0.85-1.15), area between 0.8% and 20% of image, min dimension 40px
+                if 0.85 <= aspect <= 1.15 and (img_area * 0.008) <= area <= (img_area * 0.20) and w >= 40:
+                    roi = gray[y : y + h, x : x + w]
+                    lap = cv2.Laplacian(roi, cv2.CV_64F).var()
+                    # High-density 2D matrix / QR code has massive Laplacian variance (> 3500)
+                    if lap > 3500:
+                        if any(abs(p[0] - x) < 30 and abs(p[1] - y) < 30 for p in processed_points):
+                            continue
+                        expand_w = int(w * 0.15)
+                        expand_h = int(h * 0.15)
+                        bx = max(0, x - expand_w // 2)
+                        by = max(0, y - expand_h // 2)
+                        bw = min(image.shape[1] - bx, w + expand_w)
+                        bh = min(image.shape[0] - by, h + expand_h)
+                        processed_points.add((bx, by, bw, bh))
+
+                        yield DetectedEntity(
+                            modality=Modality.IMAGE,
+                            label="qr_code",
+                            confidence=0.88,
+                            text="QR_CODE",
+                            bbox=BoundingBox(x=bx, y=by, width=bw, height=bh),
+                            mitigation="blur",
+                        )
+        except Exception as exc:
+            LOGGER.debug("Visual QR detection fallback error: %s", exc)
+
     def _detect_mrz(self, ocr_results: List[Tuple[Sequence[Tuple[float, float]], str, float]]) -> Iterable[DetectedEntity]:
         """Detect MRZ zones in identity documents."""
         for bbox_points, text, confidence in ocr_results:
             clean_text = text.replace(" ", "").upper()
-            if self._mrz_pattern.fullmatch(clean_text) or "<<" in clean_text:
+            if (self._mrz_pattern.fullmatch(clean_text) and "<" in clean_text) or "<<" in clean_text:
                 yield DetectedEntity(
                     modality=Modality.IMAGE,
                     label="mrz_zone",
@@ -651,6 +1102,8 @@ class ImageDetector:
             return False, "scene_text"
 
         cleaned = text.strip()
+        if self._is_field_label(cleaned):
+            return False, "document_structure"
 
         # Check for ID number patterns (e.g. PES2UG23CS426)
         if ID_NUMBER_RE.search(cleaned):
@@ -711,7 +1164,7 @@ class ImageDetector:
         area2 = box2.width * box2.height
         return intersection / min(area1, area2) > 0.3
 
-    def _detect_barcodes(self, image: np.ndarray) -> list[DetectedEntity]:
+    def _detect_barcodes(self, image: np.ndarray, ocr_results: list | None = None) -> list[DetectedEntity]:
         """Detect 1D barcodes and 2D barcodes/data matrices."""
         results: list[DetectedEntity] = []
         img_h, img_w = image.shape[:2]
@@ -739,6 +1192,10 @@ class ImageDetector:
                             )
             except Exception as exc:
                 LOGGER.debug("OpenCV barcode detector failed: %s", exc)
+
+        # Skip visual Sobel heuristic if OCR text is already detected on the document
+        if ocr_results and len(ocr_results) >= 2:
+            return results
 
         # Fallback 1D barcode gradient pattern detection
         try:
@@ -799,6 +1256,7 @@ class ImageDetector:
                             mitigation="mask",
                         )
                     )
+            return results
 
         try:
             gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
@@ -840,36 +1298,41 @@ class ImageDetector:
 
         # OCR signature labels
         if ocr_results:
-            sig_re = re.compile(r"\b(signature|signed|signatory|specimen\s+sign)\b", re.IGNORECASE)
+            sig_re = re.compile(r"\b(signature|signed|signatory|specimen\s+sign|हस्ताक्षर)\b", re.IGNORECASE)
             for bbox_poly, text, conf in ocr_results:
                 if sig_re.search(text):
                     pts = np.array(bbox_poly, dtype=np.int32)
                     x, y, w, h = cv2.boundingRect(pts)
-                    # Expand signature zone below or around label
-                    sig_y = min(img_h - 1, y + h)
-                    sig_h = min(img_h - sig_y, int(h * 2.5))
-                    sig_w = min(img_w - x, int(w * 1.5))
+                    # On identity cards and official documents, the handwritten signature
+                    # is placed directly ABOVE the signature label/line.
+                    sig_h = int(h * 2.2)
+                    sig_y = max(0, y - sig_h)
+                    sig_x = max(0, x - int(w * 0.15))
+                    sig_w = min(img_w - sig_x, int(w * 1.3))
                     if sig_h > 10 and sig_w > 20:
                         results.append(
                             DetectedEntity(
                                 modality=Modality.IMAGE,
                                 label="SIGNATURE",
-                                text="SIGNATURE_FIELD",
-                                confidence=float(conf),
-                                bbox=BoundingBox(x=x, y=sig_y, width=sig_w, height=sig_h),
+                                text="SIGNATURE",
+                                confidence=float(conf) if conf > 0.4 else 0.85,
+                                bbox=BoundingBox(x=sig_x, y=sig_y, width=sig_w, height=sig_h),
                                 detection_method="pattern",
-                                mitigation="mask",
+                                mitigation="blur",
                             )
                         )
 
-        # Ink color segmentation (blue, violet, red ink)
+        # Skip HSV ink color segmentation on documents where text has already been detected by OCR,
+        # to avoid misidentifying blue garments, university logos, or banners as signatures/stamps
+        if ocr_results and len(ocr_results) >= 2:
+            return results
+
+        # Ink color segmentation (blue, violet ink for official stamps and signatures)
         try:
             hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
             mask_blue = cv2.inRange(hsv, np.array([95, 50, 50]), np.array([135, 255, 240]))
             mask_purple = cv2.inRange(hsv, np.array([135, 50, 50]), np.array([165, 255, 240]))
-            mask_red1 = cv2.inRange(hsv, np.array([0, 70, 50]), np.array([10, 255, 240]))
-            mask_red2 = cv2.inRange(hsv, np.array([170, 70, 50]), np.array([180, 255, 240]))
-            mask_ink = mask_blue | mask_purple | mask_red1 | mask_red2
+            mask_ink = mask_blue | mask_purple
 
             gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
             kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
