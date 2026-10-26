@@ -889,9 +889,6 @@ class ImageMitigator:
                 num_lines = len(wrapped)
 
         # ---- Step 5: Size font and render with Pillow ----
-        # In printed identity documents, body text (names, addresses, DOB, ID)
-        # has a natural font size of 10-12pt regular.
-        # Only the 12-digit Aadhaar number has larger bold digits (~18-20pt).
         line_h = h / num_lines
         is_large_aadhaar_number = (
             entity.label.upper() == "AADHAR"
@@ -899,14 +896,20 @@ class ImageMitigator:
             and h >= 24
         )
 
+        lbl_upper = entity.label.upper()
+        # Identity cards, badges, and certificates format names, IDs,
+        # roll numbers, licenses, and cards in prominent bold typography.
+        is_bold = (
+            is_large_aadhaar_number
+            or any(k in lbl_upper for k in ("PERSON", "NAME", "AADHAR", "PAN", "ID", "ROLL", "LICENSE", "CARDINAL", "NUMBER"))
+            or (num_lines == 1 and line_h >= 24)
+        )
+
         target_w_px = max(int(w * 0.95), w - 4)
 
-        if is_large_aadhaar_number:
-            target_pt = min(20, max(16, int(line_h * 0.58)))
-            is_bold = True
-        else:
-            target_pt = min(11, max(9, int(line_h * 0.65)))
-            is_bold = False
+        # Proportionally match the original text font size based on line height (~75-80%)
+        # so replacement text fits the exact visual weight of the original document text.
+        target_pt = max(10, int(line_h * 0.78))
 
         rendered_with_pil = False
         try:
@@ -944,9 +947,10 @@ class ImageMitigator:
                 bb = pil_font.getbbox(fake_text)
             tw, th = bb[2] - bb[0], bb[3] - bb[1]
 
-            if tw > target_w_px and target_w_px > 20:
+            # If replacement text overflows the bounding box width, scale down proportionally
+            if tw > target_w_px and target_w_px > 10:
                 scale = target_w_px / float(tw)
-                target_pt = max(7, int(target_pt * scale))
+                target_pt = max(8, int(target_pt * scale))
                 pil_font = _load_pil_font(target_pt)
                 if "\n" in fake_text:
                     bb = dummy_draw.multiline_textbbox((0, 0), fake_text, font=pil_font, spacing=3)
@@ -954,7 +958,8 @@ class ImageMitigator:
                     bb = pil_font.getbbox(fake_text)
                 tw, th = bb[2] - bb[0], bb[3] - bb[1]
 
-            if is_large_aadhaar_number:
+            # Center text for single-line names, IDs, numbers; align left for multi-line address blocks
+            if is_large_aadhaar_number or ("\n" not in fake_text and tw < w * 0.92):
                 tx = max(2, (w - tw) // 2 - bb[0])
             else:
                 tx = max(2, 2 - bb[0])
@@ -966,7 +971,10 @@ class ImageMitigator:
 
             pil_img = PILImage.fromarray(cv2.cvtColor(erased, cv2.COLOR_BGR2RGB))
             draw = PILImageDraw.Draw(pil_img)
-            ink_color = np.clip(text_color_bgr, 30, 70)
+            if is_light_bg:
+                ink_color = np.clip(text_color_bgr, 10, 50)
+            else:
+                ink_color = np.clip(text_color_bgr, 200, 255)
             rgb_color = (int(ink_color[2]), int(ink_color[1]), int(ink_color[0]))
             if "\n" in fake_text:
                 draw.multiline_text((tx, ty), fake_text, fill=rgb_color, font=pil_font, spacing=3)
@@ -974,20 +982,24 @@ class ImageMitigator:
                 draw.text((tx, ty), fake_text, fill=rgb_color, font=pil_font)
             erased = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
 
-            # Subtle camera blur (anti-aliasing rendered glyphs into image texture)
-            erased = cv2.GaussianBlur(erased, (3, 3), 0.25)
             rendered_with_pil = True
         except Exception:
             rendered_with_pil = False
 
         if not rendered_with_pil:
             font = cv2.FONT_HERSHEY_DUPLEX
-            font_scale = 0.8 if is_large_aadhaar_number else 0.42
-            thickness = 2 if is_large_aadhaar_number else 1
+            font_scale = max(0.35, min(2.5, line_h / 32.0))
+            thickness = 2 if is_bold else 1
             text_size = cv2.getTextSize(fake_text, font, font_scale, thickness)[0]
-            text_x = max(2, (w - text_size[0]) // 2) if is_large_aadhaar_number else max(2, 2)
+            if text_size[0] > target_w_px and target_w_px > 10:
+                font_scale = max(0.3, font_scale * (target_w_px / float(text_size[0])))
+                text_size = cv2.getTextSize(fake_text, font, font_scale, thickness)[0]
+            text_x = max(2, (w - text_size[0]) // 2) if is_bold else max(2, 2)
             text_y = (h + text_size[1]) // 2
-            ink_color = np.clip(text_color_bgr, 30, 70)
+            if is_light_bg:
+                ink_color = np.clip(text_color_bgr, 10, 50)
+            else:
+                ink_color = np.clip(text_color_bgr, 200, 255)
             text_color_tuple = (int(ink_color[0]), int(ink_color[1]), int(ink_color[2]))
             cv2.putText(erased, fake_text, (text_x, text_y), font,
                         font_scale, text_color_tuple, thickness, cv2.LINE_AA)
