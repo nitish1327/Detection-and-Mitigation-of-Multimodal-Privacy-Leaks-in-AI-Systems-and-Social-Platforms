@@ -235,9 +235,12 @@ class ImageDetector:
                 face.metadata["gender"] = detected_gender
         entities.extend(face_entities)
                 
-        # Only run id_card_by_color and multi-rotation OCR if normal OCR found little to no text
-        has_ocr_text = bool(ocr_results and len(ocr_results) >= 2)
-        if not has_ocr_text:
+        # Run id_card_by_color and multi-rotation OCR if no PII text was detected yet
+        has_pii_text = any(
+            e.label.lower() not in {"face", "qr_code", "document_card", "layout_block"}
+            for e in entities
+        )
+        if not has_pii_text:
             entities.extend(self._detect_id_card_by_color(image))
             entities.extend(self._detect_text_multirotation(image))
 
@@ -809,6 +812,15 @@ class ImageDetector:
                             
                             p_raw = points[i] / scale
                             bbox = self._bbox_from_points(p_raw)
+
+                            # Discard full-screen or micro false-positive detections
+                            if bbox.width > image.shape[1] * 0.70 and bbox.height > image.shape[0] * 0.70:
+                                continue
+                            if bbox.width < 15 or bbox.height < 15:
+                                continue
+                            aspect = float(bbox.width) / float(bbox.height) if bbox.height > 0 else 0
+                            if aspect < 0.55 or aspect > 1.80:
+                                continue
                             
                             # Expand QR bbox by 25% to ensure full coverage (including quiet zones)
                             expand_w = int(bbox.width * 0.25)
@@ -1062,7 +1074,29 @@ class ImageDetector:
                         )
                     )
 
-        return sensitive_entities
+        # Deduplicate overlapping entities across rotation angles
+        deduped: list[DetectedEntity] = []
+        for cand in sensitive_entities:
+            merged = False
+            for idx, existing in enumerate(deduped):
+                if not cand.bbox or not existing.bbox:
+                    continue
+                ix1 = max(cand.bbox.x, existing.bbox.x)
+                iy1 = max(cand.bbox.y, existing.bbox.y)
+                ix2 = min(cand.bbox.x + cand.bbox.width, existing.bbox.x + existing.bbox.width)
+                iy2 = min(cand.bbox.y + cand.bbox.height, existing.bbox.y + existing.bbox.height)
+                if ix1 < ix2 and iy1 < iy2:
+                    inter = (ix2 - ix1) * (iy2 - iy1)
+                    smaller = min(cand.bbox.width * cand.bbox.height, existing.bbox.width * existing.bbox.height)
+                    if smaller > 0 and (inter / smaller) > 0.40:
+                        merged = True
+                        if cand.confidence > existing.confidence:
+                            deduped[idx] = cand
+                        break
+            if not merged:
+                deduped.append(cand)
+
+        return deduped
 
     @staticmethod
     def _is_geographic_text(text: str) -> bool:
@@ -1070,6 +1104,9 @@ class ImageDetector:
         if not text:
             return False
         cleaned = text.strip().lower()
+        cleaned_compact = re.sub(r"[^a-z]", "", cleaned)
+        if cleaned_compact in GEOGRAPHIC_WORDS:
+            return True
         # Remove punctuation for matching
         cleaned_alpha = re.sub(r"[^a-z\s]", "", cleaned)
         words = cleaned_alpha.split()

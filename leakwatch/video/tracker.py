@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import re
 import shutil
 import subprocess
 import tempfile
@@ -436,6 +437,8 @@ class SensitiveTextTracker:
         initial_frame: np.ndarray,
         anchor_box: Optional[Tuple[int, int, int, int]] = None,
         card_box: Optional[Tuple[int, int, int, int]] = None,
+        mitigation_style: str = "synthetic",
+        blur_strength: int = 51,
     ):
         self.x = float(x)
         self.y = float(y)
@@ -444,6 +447,8 @@ class SensitiveTextTracker:
         self.label = label
         self.orig_text = orig_text
         self.fake_text = fake_text
+        self.mitigation_style = mitigation_style
+        self.blur_strength = blur_strength
         self.lost_frames = 0
         self.vx = 0.0
         self.vy = 0.0
@@ -617,6 +622,12 @@ class SensitiveTextTracker:
         return (int(self.x), int(self.y), int(self.w), int(self.h))
 
     def apply(self, frame: np.ndarray) -> np.ndarray:
+        if self.mitigation_style == "blur":
+            return blur_region(
+                frame,
+                (int(self.x), int(self.y), int(self.w), int(self.h)),
+                blur_strength=self.blur_strength,
+            )
         return render_synthetic_text(
             frame, int(self.x), int(self.y), int(self.w), int(self.h), self.orig_text, self.fake_text
         )
@@ -838,7 +849,7 @@ def generate_video_face_preview(video_path: Path | str) -> dict[str, Any]:
     # Detect sensitive text & document entities in first frame
     sensitive_items: list[dict[str, Any]] = []
     try:
-        from ..detection.image import ImageDetector
+        from ..detection.image import ImageDetector, GEOGRAPHIC_WORDS
         from ..utils.config import ImageConfig
 
         img_cfg = ImageConfig()
@@ -852,8 +863,10 @@ def generate_video_face_preview(video_path: Path | str) -> dict[str, Any]:
             "gpe", "email", "dob", "date",
         )
         _EXCLUDED_LABELS = {
-            "qr_code", "stamp", "signature", "layout_block",
-            "document_card", "barcode", "face", "person",
+            "layout_block", "document_card", "face",
+        }
+        _VISUAL_SENSITIVE_LABELS = {
+            "qr_code", "stamp", "signature", "barcode", "license_plate",
         }
 
         s_idx = 1
@@ -861,32 +874,43 @@ def generate_video_face_preview(video_path: Path | str) -> dict[str, Any]:
             if not ent.bbox:
                 continue
             lbl = ent.label.lower()
-            txt = (ent.text or "").strip()
-            # Only genuine text PII fields can be tracked and replaced with Faker synthetic text
-            if not txt or len(txt) < 2:
-                continue
             if lbl in _EXCLUDED_LABELS:
-                continue
-            if not any(k in lbl for k in _SENSITIVE_TEXT_KEYWORDS):
-                continue
-            # Exclude known geographic words from desk mats / map backgrounds
-            if txt.lower() in {
-                "ocean", "atlantic", "pacific", "indian", "arctic", "south", "north",
-                "east", "west", "africa", "asia", "europe", "america", "sea", "bay",
-                "lat", "lon", "gmt", "utc", "equator", "tropic", "meridian",
-            }:
                 continue
 
             bx, by, bw, bh = int(ent.bbox.x), int(ent.bbox.y), int(ent.bbox.width), int(ent.bbox.height)
             if bw < 8 or bh < 6:
                 continue
 
-            fake_txt = generate_synthetic_replacement(ent.label, txt)
+            is_visual = any(k in lbl for k in _VISUAL_SENSITIVE_LABELS)
+            txt = (ent.text or "").strip()
+
+            if is_visual:
+                mitigation_style = "blur"
+                fake_txt = "REDACTED"
+                display_txt = ent.label.upper()
+            else:
+                if not txt or len(txt) < 2:
+                    continue
+                if not any(k in lbl for k in _SENSITIVE_TEXT_KEYWORDS):
+                    continue
+                words = [re.sub(r"[^a-z]", "", w) for w in txt.lower().split()]
+                words = [w for w in words if w]
+                if not words or all(len(w) <= 2 for w in words):
+                    continue
+                if any(w in GEOGRAPHIC_WORDS for w in words):
+                    continue
+                if re.sub(r"[^a-z]", "", txt.lower()) in GEOGRAPHIC_WORDS:
+                    continue
+                mitigation_style = "synthetic"
+                fake_txt = generate_synthetic_replacement(ent.label, txt)
+                display_txt = txt
+
             sensitive_items.append({
                 "id": s_idx,
                 "label": ent.label,
-                "text": txt,
+                "text": display_txt,
                 "fake_text": fake_txt,
+                "mitigation_style": mitigation_style,
                 "x": bx,
                 "y": by,
                 "w": bw,
@@ -896,10 +920,11 @@ def generate_video_face_preview(video_path: Path | str) -> dict[str, Any]:
             s_idx += 1
 
             # Draw preview box on annotated image
-            cv2.rectangle(annotated, (bx, by), (bx + bw, by + bh), (255, 200, 0), 2)
+            box_color = (0, 140, 255) if is_visual else (255, 200, 0)
+            cv2.rectangle(annotated, (bx, by), (bx + bw, by + bh), box_color, 2)
             tag = f"[{ent.label.upper()}]"
             (tw, th), _ = cv2.getTextSize(tag, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
-            cv2.rectangle(annotated, (bx, max(0, by - th - 6)), (bx + tw + 4, by), (255, 200, 0), -1)
+            cv2.rectangle(annotated, (bx, max(0, by - th - 6)), (bx + tw + 4, by), box_color, -1)
             cv2.putText(annotated, tag, (bx + 2, max(th, by - 3)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 0), 1)
     except Exception as exc:
         LOGGER.warning("Sensitive entity detection on video preview: %s", exc)
@@ -1011,12 +1036,14 @@ def process_selective_video(
                         first_frame,
                         anchor_box=face_anchor_box,
                         card_box=initial_card_box,
+                        mitigation_style=item.get("mitigation_style", "synthetic"),
+                        blur_strength=blur_strength,
                     )
                 )
                 redacted_labels.add(item["label"].upper())
         else:
             try:
-                from ..detection.image import ImageDetector
+                from ..detection.image import ImageDetector, GEOGRAPHIC_WORDS
                 from ..utils.config import ImageConfig
 
                 img_cfg = ImageConfig()
@@ -1030,33 +1057,47 @@ def process_selective_video(
                     "gpe", "email", "dob", "date",
                 )
                 _EXCLUDED_LABELS = {
-                    "qr_code", "stamp", "signature", "layout_block",
-                    "document_card", "barcode", "face", "person",
+                    "layout_block", "document_card", "face",
+                }
+                _VISUAL_SENSITIVE_LABELS = {
+                    "qr_code", "stamp", "signature", "barcode", "license_plate",
                 }
 
                 for ent in initial_entities:
                     if not ent.bbox:
                         continue
                     lbl = ent.label.lower()
-                    txt = (ent.text or "").strip()
-                    if not txt or len(txt) < 2:
-                        continue
                     if lbl in _EXCLUDED_LABELS:
-                        continue
-                    if not any(k in lbl for k in _SENSITIVE_TEXT_KEYWORDS):
-                        continue
-                    if txt.lower() in {
-                        "ocean", "atlantic", "pacific", "indian", "arctic", "south", "north",
-                        "east", "west", "africa", "asia", "europe", "america", "sea", "bay",
-                        "lat", "lon", "gmt", "utc", "equator", "tropic", "meridian",
-                    }:
                         continue
 
                     bx, by, bw, bh = int(ent.bbox.x), int(ent.bbox.y), int(ent.bbox.width), int(ent.bbox.height)
                     if bw < 8 or bh < 6:
                         continue
 
-                    fake_txt = generate_synthetic_replacement(ent.label, txt)
+                    is_visual = any(k in lbl for k in _VISUAL_SENSITIVE_LABELS)
+                    txt = (ent.text or "").strip()
+
+                    if is_visual:
+                        mitigation_style = "blur"
+                        fake_txt = "REDACTED"
+                        display_txt = ent.label.upper()
+                    else:
+                        if not txt or len(txt) < 2:
+                            continue
+                        if not any(k in lbl for k in _SENSITIVE_TEXT_KEYWORDS):
+                            continue
+                        words = [re.sub(r"[^a-z]", "", w) for w in txt.lower().split()]
+                        words = [w for w in words if w]
+                        if not words or all(len(w) <= 2 for w in words):
+                            continue
+                        if any(w in GEOGRAPHIC_WORDS for w in words):
+                            continue
+                        if re.sub(r"[^a-z]", "", txt.lower()) in GEOGRAPHIC_WORDS:
+                            continue
+                        mitigation_style = "synthetic"
+                        fake_txt = generate_synthetic_replacement(ent.label, txt)
+                        display_txt = txt
+
                     text_trackers.append(
                         SensitiveTextTracker(
                             bx,
@@ -1064,11 +1105,13 @@ def process_selective_video(
                             bw,
                             bh,
                             ent.label,
-                            txt,
+                            display_txt,
                             fake_txt,
                             first_frame,
                             anchor_box=face_anchor_box,
                             card_box=initial_card_box,
+                            mitigation_style=mitigation_style,
+                            blur_strength=blur_strength,
                         )
                     )
                     redacted_labels.add(ent.label.upper())
