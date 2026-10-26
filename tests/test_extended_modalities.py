@@ -159,11 +159,11 @@ def test_image_detectors(tmp_path: Path):
     plates = detector._detect_license_plates(plate_img)
     assert isinstance(plates, list)
 
-    # 3. Signature / stamp detector test with blue ink
+    # 3. Signature / stamp detector test with blue ink outline
     doc_img = np.zeros((500, 500, 3), dtype=np.uint8) + 255
-    # draw blue oval stamp: in BGR, blue is (200, 50, 20)
+    # draw blue oval stamp ring: in BGR, blue is (180, 40, 20)
     import cv2
-    cv2.circle(doc_img, (250, 250), 40, (180, 40, 20), -1)
+    cv2.circle(doc_img, (250, 250), 40, (180, 40, 20), 4)
     stamps = detector._detect_signatures_and_stamps(doc_img)
     assert isinstance(stamps, list)
     assert len(stamps) >= 1
