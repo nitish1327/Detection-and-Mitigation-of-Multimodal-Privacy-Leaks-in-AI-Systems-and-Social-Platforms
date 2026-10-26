@@ -100,6 +100,10 @@ class FileScanRequest(BaseModel):
         default=None,
         description="Entity labels to mitigate.",
     )
+    mask_style: str | None = Field(
+        default=None,
+        description="Audio masking strategy override.",
+    )
 
     @model_validator(mode="after")
     def validate_source(self) -> "FileScanRequest":
@@ -296,7 +300,7 @@ async def scan_image_upload(
 def scan_audio(request: FileScanRequest) -> ScanResponse:
     source_path, scratch_dir = _materialize_file(request.path, request.url, suffix=".wav")
     try:
-        result = PIPELINE.process_audio(source_path)
+        result = PIPELINE.process_audio(source_path, mask_style=request.mask_style)
         response = _build_response(result, request.policy)
         _attach_download_payload(response, result)
         return response
@@ -307,7 +311,10 @@ def scan_audio(request: FileScanRequest) -> ScanResponse:
 
 
 @app.post("/scan/audio/upload", response_model=ScanResponse)
-async def scan_audio_upload(file: UploadFile = File(...)) -> ScanResponse:
+async def scan_audio_upload(
+    file: UploadFile = File(...),
+    mask_style: str | None = Form(None),
+) -> ScanResponse:
     """Accept browser-uploaded audio via multipart/form-data (field name: file)."""
     if not file.filename:
         raise HTTPException(status_code=400, detail="Audio filename is required.")
@@ -328,7 +335,7 @@ async def scan_audio_upload(file: UploadFile = File(...)) -> ScanResponse:
     source_path.write_bytes(raw)
 
     try:
-        result = PIPELINE.process_audio(source_path)
+        result = PIPELINE.process_audio(source_path, mask_style=mask_style)
         response = _build_response(result, PolicyConfig())
         _attach_download_payload(response, result)
         return response

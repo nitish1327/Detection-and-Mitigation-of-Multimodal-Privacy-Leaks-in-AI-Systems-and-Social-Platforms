@@ -100,6 +100,7 @@ const lightboxVideo = document.getElementById("lightbox-video");
 
 // Audio tab
 const audioInput = document.getElementById("audio-input");
+const audioMaskStyle = document.getElementById("audio-mask-style");
 const audioSanitizeBtn = document.getElementById("audio-sanitize-btn");
 const audioPreviewPanel = document.getElementById("audio-preview-panel");
 const sanitizedAudioEl = document.getElementById("sanitized-audio");
@@ -1345,6 +1346,19 @@ function initAudioTab() {
   audioInput.addEventListener("change", handleAudioSelected);
   audioSanitizeBtn.addEventListener("click", handleAudioSanitize);
   audioDownloadBtn.addEventListener("click", handleDownloadAudio);
+  if (audioMaskStyle) {
+    getStoredPolicy((policy) => {
+      if (policy && policy.audio_mask_style) {
+        audioMaskStyle.value = policy.audio_mask_style;
+      }
+    });
+    audioMaskStyle.addEventListener("change", () => {
+      getStoredPolicy((policy) => {
+        policy.audio_mask_style = audioMaskStyle.value;
+        saveStoredPolicy(policy);
+      });
+    });
+  }
   if (audioRecordBtn) {
     audioRecordBtn.addEventListener("click", handleToggleAudioRecording);
   }
@@ -1614,7 +1628,8 @@ async function handleAudioSanitize() {
   audioDownloadBtn.disabled = true;
 
   try {
-    const result = await sanitizeMedia(selectedAudioFile, AUDIO_UPLOAD_ENDPOINT, AUDIO_TIMEOUT_MS);
+    const maskStyle = audioMaskStyle ? audioMaskStyle.value : "beep";
+    const result = await sanitizeMedia(selectedAudioFile, AUDIO_UPLOAD_ENDPOINT, AUDIO_TIMEOUT_MS, { mask_style: maskStyle });
     const blob = await resolveSanitizedMediaBlob(result, "audio/wav", AUDIO_TIMEOUT_MS);
     if (sanitizedAudioUrl) {
       URL.revokeObjectURL(sanitizedAudioUrl);
@@ -2022,9 +2037,16 @@ function handleDownloadVideo() {
 }
 
 // Shared media helper functions
-async function sanitizeMedia(file, endpoint, timeoutMs) {
+async function sanitizeMedia(file, endpoint, timeoutMs, extraFields = {}) {
   const formData = new FormData();
   formData.append("file", file, file.name);
+  if (extraFields && typeof extraFields === "object") {
+    for (const [key, value] of Object.entries(extraFields)) {
+      if (value !== undefined && value !== null) {
+        formData.append(key, value);
+      }
+    }
+  }
 
   const response = await fetchWithTimeout(
     endpoint,
@@ -2129,7 +2151,7 @@ function initPolicyTab() {
       const allowlist = policyAllowlist ? policyAllowlist.value.split("\n").map(s => s.trim()).filter(Boolean) : [];
       const regexRules = policyRegex ? policyRegex.value.split("\n").map(s => s.trim()).filter(Boolean) : [];
       const blurStrength = policyBlurStrength ? parseInt(policyBlurStrength.value, 10) : 51;
-      const audioMask = policyAudioMask ? policyAudioMask.value : "beep";
+      const audioMask = audioMaskStyle ? audioMaskStyle.value : (policyAudioMask ? policyAudioMask.value : "beep");
 
       const policy = {
         allowlist,
@@ -2157,6 +2179,7 @@ function initPolicyTab() {
         if (blurStrengthVal) blurStrengthVal.textContent = "51";
       }
       if (policyAudioMask) policyAudioMask.value = "beep";
+      if (audioMaskStyle) audioMaskStyle.value = "beep";
       saveStoredPolicy({}, () => {
         if (policyStatusMsg) {
           policyStatusMsg.textContent = "Reset to default settings.";

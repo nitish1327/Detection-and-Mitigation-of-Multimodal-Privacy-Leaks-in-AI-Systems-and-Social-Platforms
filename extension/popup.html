@@ -201,6 +201,17 @@
           </div>
         </div>
 
+        <div class="form-group" style="margin-top: 14px; margin-bottom: 14px;">
+          <label for="audio-mask-style" class="label">Audio Masking Strategy</label>
+          <select id="audio-mask-style" class="select-input" style="width: 100%; padding: 8px; border-radius: 6px; background: #1e1e2e; color: #fff; border: 1px solid #3e3e5e;">
+            <option value="beep">1000 Hz Beep Tone</option>
+            <option value="silence">Zero-Amplitude Silence</option>
+            <option value="white_noise">White Noise Masking</option>
+            <option value="pink_noise">Pink (1/f) Noise Masking</option>
+            <option value="garble">Voice Pitch Garble &amp; Distortion</option>
+          </select>
+        </div>
+
         <button id="audio-sanitize-btn" type="button" class="btn btn-primary" disabled>
           Sanitize Audio
         </button>
@@ -372,7 +383,7 @@
     <div id="tab-policy" class="tab-panel" role="tabpanel">
       <section class="panel">
         <h2 class="section-title">In-Extension Policy Configuration</h2>
-        <p class="muted">Customize allowlists, custom regex rules, blur parameters, and audio masking styles.</p>
+        <p class="muted">Customize allowlists, custom regex rules, and blur parameters.</p>
 
         <div class="form-group" style="margin-top: 12px;">
           <label for="policy-allowlist" class="label">Allowlisted Terms (one per line)</label>
@@ -387,17 +398,6 @@
         <div class="form-group" style="margin-top: 12px;">
           <label for="policy-blur-strength" class="label">Face Blur Strength (<span id="blur-strength-val">51</span>px)</label>
           <input type="range" id="policy-blur-strength" min="15" max="151" step="2" value="51" style="width: 100%;" />
-        </div>
-
-        <div class="form-group" style="margin-top: 12px;">
-          <label for="policy-audio-mask" class="label">Audio Masking Strategy</label>
-          <select id="policy-audio-mask" class="select-input" style="width: 100%; padding: 8px; border-radius: 6px; background: #1e1e2e; color: #fff; border: 1px solid #3e3e5e;">
-            <option value="beep">1000 Hz Beep Tone</option>
-            <option value="silence">Zero-Amplitude Silence</option>
-            <option value="white_noise">White Noise Masking</option>
-            <option value="pink_noise">Pink (1/f) Noise Masking</option>
-            <option value="garble">Voice Pitch Garble &amp; Distortion</option>
-          </select>
         </div>
 
         <div class="actions" style="margin-top: 16px;">
