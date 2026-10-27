@@ -140,6 +140,43 @@ def health() -> dict[str, str]:
     return {"status": "ok", "service": "leakwatch"}
 
 
+class PolicyUpdateRequest(BaseModel):
+    allowlist: list[str] | None = None
+    custom_regex: list[str] | None = None
+    blur_strength: int | None = None
+    audio_mask_style: str | None = None
+    audit_span_hash: bool | None = None
+
+
+@app.get("/policy")
+def get_policy() -> dict[str, Any]:
+    return {
+        "status": "ok",
+        "audit_span_hash": PIPELINE.config.explainability.audit_span_text_policy.lower() == "hash",
+        "audit_span_text_policy": PIPELINE.config.explainability.audit_span_text_policy,
+        "blur_strength": PIPELINE.config.image.face_blur_kernel,
+        "allowlist": list(PIPELINE.config.text.allowlist or []),
+    }
+
+
+@app.post("/policy")
+def update_policy(req: PolicyUpdateRequest) -> dict[str, Any]:
+    if req.audit_span_hash is not None:
+        PIPELINE.config.explainability.audit_span_text_policy = "hash" if req.audit_span_hash else "plain"
+    if req.blur_strength is not None:
+        PIPELINE.config.image.face_blur_kernel = req.blur_strength
+    if req.allowlist is not None:
+        PIPELINE.config.text.allowlist = req.allowlist
+        if hasattr(PIPELINE.text_detector, "allowlist"):
+            PIPELINE.text_detector.allowlist = {term.strip().lower() for term in req.allowlist if term.strip()}
+    return {
+        "status": "ok",
+        "audit_span_hash": PIPELINE.config.explainability.audit_span_text_policy.lower() == "hash",
+        "audit_span_text_policy": PIPELINE.config.explainability.audit_span_text_policy,
+        "blur_strength": PIPELINE.config.image.face_blur_kernel,
+    }
+
+
 @app.post("/scan/text", response_model=ScanResponse)
 def scan_text(request: TextScanRequest) -> ScanResponse:
     source_path: Path | None = None
@@ -173,6 +210,14 @@ def scan_text(request: TextScanRequest) -> ScanResponse:
                 detected,
                 selected_types,
             )
+            mitigated_result = DetectionResult(
+                source_path=source_path,
+                modality=Modality.TEXT,
+                entities=mitigated_entities,
+            )
+            PIPELINE._attach_audit(mitigated_result)
+            if mitigated_result.audit_log:
+                response.artifacts.append(str(mitigated_result.audit_log))
             response.sanitized_text = sanitized_text
             response.entities = [entity.model_dump() for entity in mitigated_entities]
             response.redacted_entities = sorted({entity.label.upper() for entity in mitigated_entities})

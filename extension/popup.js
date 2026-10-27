@@ -8,6 +8,7 @@ const VIDEO_UPLOAD_ENDPOINT = `${BACKEND_BASE}/scan/video/upload`;
 const VIDEO_PREVIEW_FACES_ENDPOINT = `${BACKEND_BASE}/scan/video/preview-faces`;
 const VIDEO_SELECTIVE_ENDPOINT = `${BACKEND_BASE}/scan/video/selective`;
 const HEALTH_ENDPOINT = `${BACKEND_BASE}/health`;
+const POLICY_ENDPOINT = `${BACKEND_BASE}/policy`;
 const TEXT_TIMEOUT_MS = 15000;
 const IMAGE_TIMEOUT_MS = 120000;
 const AUDIO_TIMEOUT_MS = 120000;
@@ -2091,6 +2092,7 @@ const policyRegex = document.getElementById("policy-regex");
 const policyBlurStrength = document.getElementById("policy-blur-strength");
 const blurStrengthVal = document.getElementById("blur-strength-val");
 const policyAudioMask = document.getElementById("policy-audio-mask");
+const policyAuditHash = document.getElementById("policy-audit-hash");
 const policySaveBtn = document.getElementById("policy-save-btn");
 const policyResetBtn = document.getElementById("policy-reset-btn");
 const policyStatusMsg = document.getElementById("policy-status-msg");
@@ -2130,6 +2132,16 @@ function initPolicyTab() {
     });
   }
 
+  // Fetch current live policy from backend if reachable
+  fetchWithTimeout(POLICY_ENDPOINT, { method: "GET" }, 3000)
+    .then((res) => (res.ok ? res.json() : null))
+    .then((data) => {
+      if (data && typeof data.audit_span_hash === "boolean" && policyAuditHash) {
+        policyAuditHash.checked = data.audit_span_hash;
+      }
+    })
+    .catch(() => {});
+
   getStoredPolicy((policy) => {
     if (policyAllowlist && policy.allowlist) {
       policyAllowlist.value = policy.allowlist.join("\n");
@@ -2144,6 +2156,9 @@ function initPolicyTab() {
     if (policyAudioMask && policy.audio_mask_style) {
       policyAudioMask.value = policy.audio_mask_style;
     }
+    if (policyAuditHash && typeof policy.audit_span_hash === "boolean") {
+      policyAuditHash.checked = policy.audit_span_hash;
+    }
   });
 
   if (policySaveBtn) {
@@ -2152,13 +2167,32 @@ function initPolicyTab() {
       const regexRules = policyRegex ? policyRegex.value.split("\n").map(s => s.trim()).filter(Boolean) : [];
       const blurStrength = policyBlurStrength ? parseInt(policyBlurStrength.value, 10) : 51;
       const audioMask = audioMaskStyle ? audioMaskStyle.value : (policyAudioMask ? policyAudioMask.value : "beep");
+      const auditSpanHash = policyAuditHash ? Boolean(policyAuditHash.checked) : false;
 
       const policy = {
         allowlist,
         custom_regex: regexRules,
         blur_strength: blurStrength,
         audio_mask_style: audioMask,
+        audit_span_hash: auditSpanHash,
       };
+
+      // Sync settings with local backend
+      fetchWithTimeout(
+        POLICY_ENDPOINT,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            allowlist,
+            custom_regex: regexRules,
+            blur_strength: blurStrength,
+            audio_mask_style: audioMask,
+            audit_span_hash: auditSpanHash,
+          }),
+        },
+        5000
+      ).catch((err) => console.warn("Failed to sync policy to backend:", err));
 
       saveStoredPolicy(policy, () => {
         if (policyStatusMsg) {
@@ -2180,6 +2214,18 @@ function initPolicyTab() {
       }
       if (policyAudioMask) policyAudioMask.value = "beep";
       if (audioMaskStyle) audioMaskStyle.value = "beep";
+      if (policyAuditHash) policyAuditHash.checked = false;
+
+      fetchWithTimeout(
+        POLICY_ENDPOINT,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ audit_span_hash: false }),
+        },
+        5000
+      ).catch(() => {});
+
       saveStoredPolicy({}, () => {
         if (policyStatusMsg) {
           policyStatusMsg.textContent = "Reset to default settings.";

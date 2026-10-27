@@ -400,6 +400,14 @@
           <input type="range" id="policy-blur-strength" min="15" max="151" step="2" value="51" style="width: 100%;" />
         </div>
 
+        <div class="form-group" style="margin-top: 14px; background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 6px; padding: 10px 12px; display: flex; align-items: flex-start; gap: 10px;">
+          <input type="checkbox" id="policy-audit-hash" style="margin-top: 3px; cursor: pointer; width: 16px; height: 16px; accent-color: #3b82f6;" />
+          <div style="flex: 1;">
+            <label for="policy-audit-hash" class="label" style="cursor: pointer; margin-bottom: 2px; font-weight: 600; color: #f1f5f9;">Hash Sensitive Spans in Audit Logs (SHA-256)</label>
+            <p class="muted" style="font-size: 11px; margin: 0; line-height: 1.35;">When enabled, replaces plain-text PII in local <code>.audit.json</code> files with irreversible 64-character SHA-256 cryptographic digests.</p>
+          </div>
+        </div>
+
         <div class="actions" style="margin-top: 16px;">
           <button id="policy-save-btn" type="button" class="btn btn-primary">Save Policy</button>
           <button id="policy-reset-btn" type="button" class="btn btn-secondary">Reset to Defaults</button>
