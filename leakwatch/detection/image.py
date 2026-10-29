@@ -32,6 +32,7 @@ else:  # pragma: no cover
 # These should never be mitigated — only the values beside them are sensitive.
 _DOCUMENT_FIELD_LABELS = {
     # Issuing authorities & document headers
+    "republic of india", "republic of", "republic", "india", "bharat ganarajya", "bharat",
     "government of india", "govt of india", "govt. of india", "gov of india", "government",
     "goverment of india", "goverment",
     "unique identification authority of india", "unique identification authority", "uidai",
@@ -47,10 +48,12 @@ _DOCUMENT_FIELD_LABELS = {
     "elector photo identity card", "elactor photo identity card", "photo identity card", "identity card", "elector", "elector photo",
     "voter id", "voter identity card",
     "pes university", "pes institute of technology", "pes", "university",
-    "bharat sarkar", "bharat",
+    "bharat sarkar",
     
-    # Common ID / driving license / card field labels
-    "name", "full name", "surname", "first name", "last name",
+    # Common ID / driving license / passport card field labels & values
+    "type", "type/type", "type / type", "code", "code/code", "code / code", "country code", "ind", "p",
+    "nationality", "national", "indian", "hrat indian", "hrt turt", "hrat", "turt",
+    "name", "full name", "surname", "first name", "last name", "given name", "given names",
     "license no", "license no.", "license no_", "licence no", "licence no.", "license number", "licence number", "dl no", "dl no.",
     "authorization to drive", "auth to drive", "to drive", "class of vehicle", "cov",
     "date of issue", "doi", "issue date",
@@ -62,7 +65,7 @@ _DOCUMENT_FIELD_LABELS = {
     "sex", "gender", "male", "female", "transgender",
     "permanent address", "present address", "address", "res. address", "residential address",
     "place of issue", "issuing authority", "issued by",
-    "nationality", "country",
+    "place of birth", "country",
     "signature", "specimen signature", "holder's signature", "photograph", "photo", "sign",
     "enrolment no", "enrolment number", "enrollment no", "enrollment number",
     "enrollront no", "enrollront number", "enrollront",
@@ -199,9 +202,28 @@ class ImageDetector:
         entities: list[DetectedEntity] = []
         detected_gender = None
         
+        # Face Detection (run early so photo location is available for ID card signature detection)
+        raw_faces = list(self._detect_faces(image))
+
+        # Ghost portrait / secondary photo detection (e.g. blue watermark silhouette on right side of passports)
+        ghost_entities = list(self._detect_ghost_portraits(image, face_entities=raw_faces))
+
+        # Filter out any face entity on the right half that overlaps with ghost portrait
+        face_entities: list[DetectedEntity] = []
+        for face in raw_faces:
+            if face.bbox and face.bbox.x > image.shape[1] * 0.45:
+                if any(self._bbox_overlap(face.bbox, g.bbox) for g in ghost_entities if g.bbox):
+                    continue
+            face_entities.append(face)
+
         # QR Detection
         if self.config.enable_qr:
             entities.extend(self._detect_qr(image))
+
+        # Signature & Stamp Detection (using photo locations)
+        sig_entities: list[DetectedEntity] = []
+        if getattr(self.config, "enable_signature_stamp", True):
+            sig_entities.extend(self._detect_signatures_and_stamps(image, ocr_results=None, face_entities=face_entities))
 
         # OCR + MRZ
         all_ocr_text = ""
@@ -222,18 +244,55 @@ class ImageDetector:
                 detected_gender = "male"
             elif "d/o" in ocr_lower or "w/o" in ocr_lower or "daughter of" in ocr_lower or "wife of" in ocr_lower:
                 detected_gender = "female"
+
+            # Check OCR signature labels
+            if getattr(self.config, "enable_signature_stamp", True) and ocr_results:
+                more_sigs = self._detect_signatures_and_stamps(image, ocr_results=ocr_results, face_entities=None)
+                for s in more_sigs:
+                    if not any(s.bbox and ex.bbox and abs(s.bbox.x - ex.bbox.x) < 20 and abs(s.bbox.y - ex.bbox.y) < 20 for ex in sig_entities):
+                        sig_entities.append(s)
+
+                # Remove false-positive face-bottom heuristic signatures if the region overlaps printed OCR text (e.g. Address)
+                cleaned_sigs = []
+                for s in sig_entities:
+                    if s.detection_method == "heuristic" and s.bbox:
+                        sb = s.bbox
+                        overlaps_ocr = False
+                        for r in ocr_results:
+                            if not r[1] or not r[1].strip():
+                                continue
+                            r_poly = np.array(r[0], dtype=np.int32)
+                            rx, ry, rw, rh = cv2.boundingRect(r_poly)
+                            if max(sb.x, rx) < min(sb.x + sb.width, rx + rw) and max(sb.y, ry) < min(sb.y + sb.height, ry + rh):
+                                overlaps_ocr = True
+                                break
+                        if overlaps_ocr:
+                            continue
+                    cleaned_sigs.append(s)
+                sig_entities = cleaned_sigs
+
+            sig_boxes = [s.bbox for s in sig_entities if s.bbox]
+            mrz_names, mrz_passport_no = self._extract_mrz_metadata(ocr_results)
                 
-            entities.extend(self._process_ocr_results(ocr_results, detected_gender, image_shape=image.shape))
+            entities.extend(self._process_ocr_results(
+                ocr_results,
+                detected_gender,
+                image_shape=image.shape,
+                sig_boxes=sig_boxes,
+                mrz_names=mrz_names,
+                mrz_passport_no=mrz_passport_no,
+            ))
             
             if self.config.enable_mrz:
-                entities.extend(self._detect_mrz(ocr_results))
+                entities.extend(self._detect_mrz(ocr_results, image_shape=image.shape))
         
-        # Face Detection (last, so we can use OCR context if available)
-        face_entities = list(self._detect_faces(image))
+        entities.extend(sig_entities)
+
         if detected_gender:
             for face in face_entities:
                 face.metadata["gender"] = detected_gender
         entities.extend(face_entities)
+        entities.extend(ghost_entities)
                 
         # Only run id_card_by_color and multi-rotation OCR if normal OCR found little to no text
         has_ocr_text = bool(ocr_results and len(ocr_results) >= 2)
@@ -251,12 +310,54 @@ class ImageDetector:
             ocr_res = ocr_results if self.config.enable_ocr else None
             entities.extend(self._detect_license_plates(image, ocr_results=ocr_res))
 
-        # Signature & Stamp Detection
-        if getattr(self.config, "enable_signature_stamp", True):
-            ocr_res = ocr_results if self.config.enable_ocr else None
-            entities.extend(self._detect_signatures_and_stamps(image, ocr_results=ocr_res))
-
         return entities
+
+    # --- Ghost Portrait Detection -----------------------------------------
+    def _detect_ghost_portraits(
+        self,
+        image: np.ndarray,
+        face_entities: list[DetectedEntity] | None = None,
+    ) -> Iterable[DetectedEntity]:
+        """Detect secondary ghost portraits / holographic watermarked silhouettes on ID cards/passports."""
+        if image is None or image.size == 0:
+            return
+        img_h, img_w = image.shape[:2]
+        if img_w < 100 or img_h < 100:
+            return
+
+        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+        # Blue/cyan ghost watermark on right side of biometric documents
+        blue_mask = cv2.inRange(hsv, np.array([90, 40, 50]), np.array([135, 255, 255]))
+
+        # Look on the right half between 15% and 75% height
+        y1, y2 = int(img_h * 0.15), int(img_h * 0.75)
+        x1 = int(img_w * 0.55)
+        right_mask = np.zeros_like(blue_mask)
+        right_mask[y1:y2, x1:] = blue_mask[y1:y2, x1:]
+
+        cnts, _ = cv2.findContours(right_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        for c in cnts:
+            area = cv2.contourArea(c)
+            if area > (img_w * img_h * 0.02):
+                bx, by, bw, bh = cv2.boundingRect(c)
+                # Refine to dense columns to trim sparse margin text/markings
+                c_mask = np.zeros_like(blue_mask)
+                cv2.drawContours(c_mask, [c], -1, 255, -1)
+                col_counts = np.sum(c_mask > 0, axis=0)
+                dense_cols = np.where(col_counts > (bh * 0.15))[0]
+                if len(dense_cols) > 0:
+                    bx = int(dense_cols[0])
+                    bw = int(dense_cols[-1] - dense_cols[0])
+
+                if 0.5 <= (bw / max(1, bh)) <= 1.6 and bw >= int(img_w * 0.12) and bh >= int(img_h * 0.20):
+                    yield DetectedEntity(
+                        modality=Modality.IMAGE,
+                        label="ghost_portrait",
+                        confidence=0.92,
+                        bbox=BoundingBox(x=bx, y=by, width=bw, height=bh),
+                        mitigation="blur",
+                        detection_method="heuristic",
+                    )
 
     # --- ID Card Detection via Color Segmentation -------------------------
     def _detect_id_card_by_color(self, image: np.ndarray) -> Iterable[DetectedEntity]:
@@ -332,7 +433,21 @@ class ImageDetector:
         if self._ocr_reader is None:
             self._ocr_reader = EasyOcrReader(list(self.config.text_detection_langs), gpu=False)
 
+        img_h, img_w = image.shape[:2]
+        # For low-resolution or thumbnail document scans, scale up adaptively so EasyOCR can detect small font characters
+        scale = max(1.0, min(3.5, 800.0 / max(img_w, 1))) if (img_w < 500 or img_h < 350) else 1.0
         rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+        if scale > 1.0:
+            resized = cv2.resize(rgb_image, (int(img_w * scale), int(img_h * scale)), interpolation=cv2.INTER_CUBIC)
+            raw_res = self._ocr_reader.readtext(resized)
+            inv_scale = 1.0 / scale
+            scaled_res = []
+            for pts, txt, conf in raw_res:
+                scaled_pts = [(p[0] * inv_scale, p[1] * inv_scale) for p in pts]
+                scaled_res.append((scaled_pts, txt, conf))
+            return scaled_res
+
         return self._ocr_reader.readtext(rgb_image)
 
     @staticmethod
@@ -347,9 +462,16 @@ class ImageDetector:
         # If the text contains an actual ID number (like 2189/42082/02898) or Aadhaar number, it has sensitive value
         if re.search(r"\b\d{4}/\d{5}/\d{5}\b", cleaned) or re.search(r"\b\d{4}\s\d{4}\s\d{4}\b", cleaned):
             return False
+        # Document header, country code, and nationality protections
+        if any(term in cleaned for term in ["republic of india", "government of india", "govt of india", "nationality", "indian", "rashtriyata", "bharat ganarajya"]):
+            return True
+        if cleaned in {"ind", "p", "type", "code", "ind.", "ind / ind", "type / type", "code / code", "hrt turt", "hrat", "turt", "type/type", "code/code"}:
+            return True
+        if re.search(r"\b(type|code|nationality|republic)\b", cleaned):
+            return True
         if cleaned in _DOCUMENT_FIELD_LABELS:
             return True
-        if any(cleaned.startswith(p) for p in ["signatur", "signature", "photograph", "photo"]):
+        if any(cleaned.startswith(p) for p in ["signatur", "signature", "photograph", "photo", "sign.", "sign:", "sign "]) or bool(re.match(r"^sign\b", cleaned)):
             return True
         if cleaned in {"vid", "mid", "uid", "vid:", "mid:", "uid:"}:
             return True
@@ -361,11 +483,42 @@ class ImageDetector:
             return True
         return False
 
+    @staticmethod
+    def _extract_mrz_metadata(ocr_results: list) -> tuple[set[str], str | None]:
+        """Extract surname, given names, and passport number from MRZ lines."""
+        mrz_names: set[str] = set()
+        passport_no: str | None = None
+        for _, text, _ in ocr_results:
+            clean = text.replace(" ", "").upper()
+            clean_norm = clean
+            clean_norm = re.sub(r"^[P{][A-Z0-9<]{1,3}N[PD]", "P<IND", clean_norm)
+            clean_norm = re.sub(r"^[P{][<K{(S]{0,2}", "P<", clean_norm)
+            clean_norm = re.sub(r"[K{(<]{2,}", "<<", clean_norm)
+            clean_norm = re.sub(r"[K{(]<", "<<", clean_norm)
+            if "<" in clean_norm and ("P<" in clean_norm or "<<" in clean_norm or re.match(r"[A-Z0-9<]{25,44}", clean_norm)):
+                m1 = re.search(r"P<[A-Z]{3}([A-Z]+)<<([A-Z<]+)", clean_norm)
+                if m1:
+                    surname = m1.group(1).replace("<", "").strip()
+                    if surname and len(surname) >= 2:
+                        mrz_names.add(surname)
+                    given_names = [n.strip() for n in m1.group(2).split("<") if n.strip() and len(n.strip()) >= 2]
+                    for gn in given_names:
+                        mrz_names.add(gn)
+                m2 = re.search(r"^([A-Z0-9]{7,9})<\d", clean_norm)
+                if m2:
+                    candidate = m2.group(1).strip()
+                    if re.match(r"^[A-Z0-9]{7,9}$", candidate):
+                        passport_no = candidate
+        return mrz_names, passport_no
+
     def _process_ocr_results(
         self,
         ocr_results: List[Tuple[Sequence[Tuple[float, float]], str, float]],
         detected_gender: str | None = None,
         image_shape: tuple[int, ...] | None = None,
+        sig_boxes: list[BoundingBox] | None = None,
+        mrz_names: set[str] | None = None,
+        mrz_passport_no: str | None = None,
     ) -> List[DetectedEntity]:
         """Convert OCR results into DetectedEntity objects, routing via TextDetector.
 
@@ -376,6 +529,22 @@ class ImageDetector:
         valid_items: list[tuple[Sequence[Tuple[float, float]], str, float, BoundingBox]] = []
         img_h = image_shape[0] if image_shape else None
 
+        # Filter out MRZ lines from text processing so they are not treated as id_number
+        if ocr_results:
+            filtered_ocr = []
+            for pts, txt, conf in ocr_results:
+                clean = txt.replace(" ", "").upper()
+                ys = [p[1] for p in pts]
+                is_mrz_line = (
+                    "<" in clean and ("P<" in clean or "<<" in clean or re.match(r"[A-Z0-9<]{25,44}", clean))
+                )
+                if image_shape and min(ys) >= image_shape[0] * 0.70 and "<" in clean:
+                    is_mrz_line = True
+                if is_mrz_line:
+                    continue
+                filtered_ocr.append((pts, txt, conf))
+            ocr_results = filtered_ocr
+
         # Horizontal same-line token grouping: join words on the same line that OCR split apart
         if ocr_results:
             raw_entries = []
@@ -385,6 +554,11 @@ class ImageDetector:
                     continue
                 xs = [p[0] for p in pts]
                 ys = [p[1] for p in pts]
+                cx = sum(xs) / len(xs)
+                cy = sum(ys) / len(ys)
+                # If token falls inside an identified signature box, exclude it from text lines
+                if sig_boxes and any(sb.x <= cx <= sb.x + sb.width and sb.y <= cy <= sb.y + sb.height for sb in sig_boxes):
+                    continue
                 raw_entries.append({
                     "pts": pts, "txt": cleaned, "conf": float(conf),
                     "x": min(xs), "y": min(ys),
@@ -429,13 +603,33 @@ class ImageDetector:
             ocr_results = merged_ocr
 
         for bbox_points, text, confidence in ocr_results:
-            if confidence < self.config.min_confidence:
-                continue
             cleaned = text.strip()
             if not cleaned or len(cleaned) < 2:
                 continue
             if self._is_field_label(cleaned):
                 continue
+
+            # Check if this token matches passport number or is in the passport data column
+            is_p_no = False
+            clean_alnum = cleaned.replace(" ", "").strip()
+            if (
+                bool(re.fullmatch(r"[A-Z]{1,2}\d{6,8}", clean_alnum, re.IGNORECASE))
+                or (mrz_passport_no and (clean_alnum.upper() == mrz_passport_no.upper() or (len(clean_alnum) >= 6 and clean_alnum[1:7] in mrz_passport_no)))
+            ):
+                is_p_no = True
+
+            is_passport_col = False
+            if image_shape:
+                ih, iw = image_shape[:2]
+                xs = [p[0] for p in bbox_points]
+                ys = [p[1] for p in bbox_points]
+                bx, by = min(xs), min(ys)
+                if (iw * 0.25 <= bx <= iw * 0.65) and (ih * 0.18 <= by <= ih * 0.75):
+                    is_passport_col = True
+
+            if confidence < self.config.min_confidence and not is_p_no and not is_passport_col:
+                continue
+
             bbox = self._bbox_from_points(bbox_points)
             valid_items.append((bbox_points, cleaned, float(confidence), bbox))
 
@@ -570,8 +764,14 @@ class ImageDetector:
                 )
                 continue
 
-            # ID / License / Roll / PAN number match
-            if ID_NUMBER_RE.search(text) or re.search(r"\b[A-Z]{2}[0-9O]{12,16}\b", text.replace(" ", "")) or re.search(r"\b[A-Z]{5}\d{4}[A-Z]\b", text):
+            # ID / License / Roll / PAN / Passport number match
+            clean_alnum = text.replace(" ", "").strip()
+            is_passport_num = (
+                bool(re.fullmatch(r"[A-Z]{1,2}\d{6,8}", clean_alnum, re.IGNORECASE))
+                or bool(re.fullmatch(r"[A-PR-WYa-pr-wy][1-9]\d{6,7}", clean_alnum, re.IGNORECASE))
+                or (mrz_passport_no and (clean_alnum.upper() == mrz_passport_no.upper() or (len(clean_alnum) >= 6 and clean_alnum[1:7] in mrz_passport_no)))
+            )
+            if ID_NUMBER_RE.search(text) or is_passport_num or re.search(r"\b[A-Z]{2}[0-9O]{12,16}\b", clean_alnum) or re.search(r"\b[A-Z]{5}\d{4}[A-Z]\b", text):
                 results.append(
                     DetectedEntity(
                         modality=Modality.IMAGE,
@@ -581,6 +781,64 @@ class ImageDetector:
                         bbox=bbox,
                         mitigation=mit_style,
                         detection_method="regex",
+                    )
+                )
+                continue
+
+            # Passport column personal data mapping (Surname, Given Name, DOB, Place of Birth, Place of Issue, Date of Issue, Date of Expiry)
+            if image_shape:
+                ih, iw = image_shape[:2]
+                if (iw * 0.25 <= bbox.x <= iw * 0.65) and (ih * 0.18 <= bbox.y <= ih * 0.75):
+                    rel_y = bbox.y / float(ih)
+                    lbl = None
+                    if rel_y < 0.28:
+                        lbl = "PERSON"  # Surname
+                    elif rel_y < 0.35:
+                        lbl = "PERSON"  # Given Names
+                    elif rel_y < 0.43:
+                        lbl = "DOB"     # Date of Birth
+                    elif rel_y < 0.50:
+                        lbl = "address" # Place of Birth
+                    elif rel_y < 0.58:
+                        lbl = "address" # Place of Issue
+                    elif rel_y < 0.65:
+                        lbl = "DOB"     # Date of Issue
+                    else:
+                        lbl = "DOB"     # Date of Expiry
+
+                    if lbl:
+                        metadata = {}
+                        if detected_gender and lbl == "PERSON":
+                            metadata["gender"] = detected_gender
+                        results.append(
+                            DetectedEntity(
+                                modality=Modality.IMAGE,
+                                label=lbl,
+                                text=text,
+                                confidence=confidence,
+                                bbox=bbox,
+                                mitigation=mit_style,
+                                detection_method="pattern",
+                                metadata=metadata,
+                            )
+                        )
+                        continue
+
+            # Person surname / name match from MRZ
+            if mrz_names and text.strip().upper() in mrz_names:
+                metadata = {}
+                if detected_gender:
+                    metadata["gender"] = detected_gender
+                results.append(
+                    DetectedEntity(
+                        modality=Modality.IMAGE,
+                        label="PERSON",
+                        text=text,
+                        confidence=confidence,
+                        bbox=bbox,
+                        mitigation=mit_style,
+                        detection_method="pattern",
+                        metadata=metadata,
                     )
                 )
                 continue
@@ -665,7 +923,7 @@ class ImageDetector:
             nested_entities = self._text_detector.detect(text_norm) if self._text_detector else []
             if nested_entities:
                 for nested in nested_entities:
-                    if nested.text and self._is_field_label(nested.text):
+                    if nested.text and (self._is_field_label(nested.text) or any(k in nested.text.lower() for k in ["republic of india", "indian", "nationality"]) or nested.text.strip().upper() in {"IND", "P"}):
                         continue
                     metadata = nested.metadata.copy()
                     if detected_gender and nested.label in {"PERSON", "NAME"}:
@@ -740,7 +998,7 @@ class ImageDetector:
                 words = text.split()
                 alpha_words = [w for w in words if w.isalpha()]
                 if len(alpha_words) >= 2 and all(w[0].isupper() for w in alpha_words):
-                    if not self._is_geographic_text(text):
+                    if not self._is_geographic_text(text) and not self._is_field_label(text) and not any(k in text.lower() for k in ["republic of india", "indian", "nationality"]):
                         metadata = {}
                         if detected_gender:
                             metadata["gender"] = detected_gender
@@ -875,19 +1133,57 @@ class ImageDetector:
         except Exception as exc:
             LOGGER.debug("Visual QR detection fallback error: %s", exc)
 
-    def _detect_mrz(self, ocr_results: List[Tuple[Sequence[Tuple[float, float]], str, float]]) -> Iterable[DetectedEntity]:
-        """Detect MRZ zones in identity documents."""
+    def _detect_mrz(
+        self,
+        ocr_results: List[Tuple[Sequence[Tuple[float, float]], str, float]],
+        image_shape: tuple[int, ...] | None = None,
+    ) -> Iterable[DetectedEntity]:
+        """Detect MRZ zones in identity documents and yield unified erase region."""
+        mrz_boxes = []
+        mrz_texts = []
         for bbox_points, text, confidence in ocr_results:
             clean_text = text.replace(" ", "").upper()
+            is_mrz = False
             if (self._mrz_pattern.fullmatch(clean_text) and "<" in clean_text) or "<<" in clean_text:
-                yield DetectedEntity(
-                    modality=Modality.IMAGE,
-                    label="mrz_zone",
-                    confidence=float(confidence),
-                    text=text,
-                    bbox=self._bbox_from_points(bbox_points),
-                    mitigation="blur",
-                )
+                is_mrz = True
+            elif "<" in clean_text and (len(clean_text) >= 25 or re.search(r"<[A-Z0-9<]{10,}", clean_text)):
+                if image_shape:
+                    img_h = image_shape[0]
+                    ys = [p[1] for p in bbox_points]
+                    if min(ys) >= img_h * 0.70:
+                        is_mrz = True
+                else:
+                    is_mrz = True
+            if is_mrz:
+                mrz_boxes.append(self._bbox_from_points(bbox_points))
+                mrz_texts.append(text)
+
+        if not mrz_boxes:
+            return
+
+        min_x = 0
+        min_y = max(0, min(b.y for b in mrz_boxes) - 5)
+        if image_shape:
+            img_h, img_w = image_shape[:2]
+            max_y2 = img_h
+            max_x2 = img_w
+        else:
+            max_x2 = max(b.x + b.width for b in mrz_boxes) + 5
+            max_y2 = max(b.y + b.height for b in mrz_boxes) + 10
+
+        yield DetectedEntity(
+            modality=Modality.IMAGE,
+            label="mrz_zone",
+            confidence=0.95,
+            text="\n".join(mrz_texts),
+            bbox=BoundingBox(
+                x=int(min_x),
+                y=int(min_y),
+                width=int(max_x2 - min_x),
+                height=int(max_y2 - min_y),
+            ),
+            mitigation="mask",
+        )
         
 
     def _detect_layout(
@@ -1290,41 +1586,119 @@ class ImageDetector:
 
         return results
 
-    def _detect_signatures_and_stamps(self, image: np.ndarray, ocr_results: list | None = None) -> list[DetectedEntity]:
-        """Detect handwritten ink signatures and official stamps using HSV ink segmentation."""
+    def _detect_signatures_and_stamps(
+        self,
+        image: np.ndarray,
+        ocr_results: list | None = None,
+        face_entities: list | None = None,
+    ) -> list[DetectedEntity]:
+        """Detect handwritten ink signatures and official stamps using HSV and spatial heuristic segmentation."""
         results: list[DetectedEntity] = []
         img_h, img_w = image.shape[:2]
         img_area = img_h * img_w
 
-        # OCR signature labels
+        # 1. Signature directly below photo IDs (e.g. passport or identity card holder signature)
+        if face_entities:
+            for face in face_entities:
+                if not face.bbox or face.confidence < 0.5:
+                    continue
+                fb = face.bbox
+                if fb.x > img_w * 0.40:
+                    continue
+                sig_y = int(fb.y + fb.height)
+                sig_max_y = int(img_h * 0.77)
+                sig_h = min(sig_max_y - sig_y, int(fb.height * 1.5))
+                sig_x = max(0, int(fb.x - 30))
+                sig_w = min(img_w - sig_x, int(fb.width + 60))
+                # For passports and left-aligned photo IDs, keep signature strictly within left photo column (x <= 195)
+                if fb.x + fb.width < img_w * 0.4:
+                    sig_w = min(sig_w, max(20, int(img_w * 0.32) - sig_x))
+                if sig_h > 20 and sig_w > 30:
+                    roi = image[sig_y : sig_y + sig_h, sig_x : sig_x + sig_w]
+                    roi_gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+                    bg_val = float(np.percentile(roi_gray, 75))
+                    dark_thresh = min(150, bg_val - 25)
+                    stroke_mask = roi_gray < dark_thresh
+                    stroke_count = int(np.count_nonzero(stroke_mask))
+                    area = sig_w * sig_h
+                    if stroke_count > 150 and 0.01 <= (stroke_count / area) <= 0.40:
+                        stroke_pts = np.argwhere(stroke_mask)
+                        sy1 = int(stroke_pts[:, 0].min() + sig_y)
+                        sy2 = int(stroke_pts[:, 0].max() + sig_y)
+                        sx1 = int(stroke_pts[:, 1].min() + sig_x)
+                        sx2 = int(stroke_pts[:, 1].max() + sig_x)
+                        pad = 6
+                        fx = max(0, sx1 - pad)
+                        fy = max(0, sy1 - pad)
+                        fw = min(img_w - fx, (sx2 - sx1) + 2 * pad)
+                        fh = min(img_h - fy, (sy2 - sy1) + 2 * pad)
+                        results.append(
+                            DetectedEntity(
+                                modality=Modality.IMAGE,
+                                label="SIGNATURE",
+                                text="SIGNATURE",
+                                confidence=0.90,
+                                bbox=BoundingBox(x=fx, y=fy, width=fw, height=fh),
+                                detection_method="heuristic",
+                                mitigation="blur",
+                            )
+                        )
+
+        # 2. OCR signature labels
         if ocr_results:
-            sig_re = re.compile(r"\b(signature|signed|signatory|specimen\s+sign|हस्ताक्षर)\b", re.IGNORECASE)
+            sig_re = re.compile(
+                r"\b(signature|signed|signatory|specimen\s+sign|हस्ताक्षर)\b|(?:\bsign\b[.:\s])",
+                re.IGNORECASE,
+            )
             for bbox_poly, text, conf in ocr_results:
                 if sig_re.search(text):
                     pts = np.array(bbox_poly, dtype=np.int32)
                     x, y, w, h = cv2.boundingRect(pts)
                     # On identity cards and official documents, the handwritten signature
                     # is placed directly ABOVE the signature label/line.
-                    sig_h = int(h * 2.2)
+                    sig_h = int(h * 2.8)
                     sig_y = max(0, y - sig_h)
-                    sig_x = max(0, x - int(w * 0.15))
-                    sig_w = min(img_w - sig_x, int(w * 1.3))
+                    sig_x = max(0, x - int(w * 0.10))
+                    sig_w = min(img_w - sig_x, int(w * 1.2))
                     if sig_h > 10 and sig_w > 20:
+                        # Refine bbox by finding actual ink strokes in the search region above the label
+                        roi = image[sig_y:y, sig_x:sig_x + sig_w]
+                        if roi.size > 0:
+                            roi_gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+                            bg_val = float(np.percentile(roi_gray, 75))
+                            dark_thresh = min(150, bg_val - 25)
+                            stroke_mask = roi_gray < dark_thresh
+                            stroke_pts = np.argwhere(stroke_mask)
+                            if len(stroke_pts) > 40:
+                                sy1 = int(stroke_pts[:, 0].min() + sig_y)
+                                sy2 = int(stroke_pts[:, 0].max() + sig_y)
+                                sx1 = int(stroke_pts[:, 1].min() + sig_x)
+                                sx2 = int(stroke_pts[:, 1].max() + sig_x)
+                                pad = 8
+                                final_x = max(0, sx1 - pad)
+                                final_y = max(0, sy1 - pad)
+                                final_w = min(img_w - final_x, (sx2 - sx1) + 2 * pad)
+                                final_h = min(img_h - final_y, (sy2 - sy1) + 2 * pad)
+                            else:
+                                final_x, final_y, final_w, final_h = sig_x, sig_y, sig_w, sig_h
+                        else:
+                            final_x, final_y, final_w, final_h = sig_x, sig_y, sig_w, sig_h
+
                         results.append(
                             DetectedEntity(
                                 modality=Modality.IMAGE,
                                 label="SIGNATURE",
                                 text="SIGNATURE",
                                 confidence=float(conf) if conf > 0.4 else 0.85,
-                                bbox=BoundingBox(x=sig_x, y=sig_y, width=sig_w, height=sig_h),
+                                bbox=BoundingBox(x=final_x, y=final_y, width=final_w, height=final_h),
                                 detection_method="pattern",
                                 mitigation="blur",
                             )
                         )
 
-        # Skip HSV ink color segmentation on documents where text has already been detected by OCR,
+        # Skip HSV ink color segmentation on documents where face signature or text has been detected,
         # to avoid misidentifying blue garments, university logos, or banners as signatures/stamps
-        if ocr_results and len(ocr_results) >= 2:
+        if face_entities is not None or (ocr_results and len(ocr_results) >= 2):
             return results
 
         # Ink color segmentation (blue, violet ink for official stamps and signatures)

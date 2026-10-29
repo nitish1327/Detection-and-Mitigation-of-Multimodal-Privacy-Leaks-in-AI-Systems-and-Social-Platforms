@@ -189,8 +189,8 @@ class ImageMitigator:
 
             return False
 
-        # Separate face/qr/signature/barcode from text PII
-        non_text_labels = {"face", "qr_code", "barcode", "signature", "stamp", "document_card", "license_plate"}
+        # Separate face/qr/signature/barcode/mrz from text PII
+        non_text_labels = {"face", "qr_code", "barcode", "signature", "stamp", "document_card", "license_plate", "mrz_zone", "ghost_portrait"}
         non_text = [e for e in sorted_entities if e.label.lower() in non_text_labels]
         text_pii = [e for e in sorted_entities if e.label.lower() not in non_text_labels]
 
@@ -261,10 +261,13 @@ class ImageMitigator:
                 continue
 
             style = entity.mitigation if entity.mitigation != "none" else self.config.default_style
-            if entity.label in {"qr_code", "mrz_zone"}:
+            if entity.label in {"qr_code"}:
                 style = "aggressive_blur"
 
-            if entity.label.lower() in {"signature", "stamp"}:
+            if entity.label == "mrz_zone":
+                style = "erase"
+
+            if entity.label.lower() in {"signature", "stamp", "ghost_portrait"}:
                 style = "blur"
 
             if entity.label == "face" and style in {"blur", "synthetic"}:
@@ -315,6 +318,9 @@ class ImageMitigator:
                 elif entity.label.lower() in {"signature", "stamp"}:
                     image[y : y + h, x : x + w] = self._blur_region(roi_original)
                     mitigated_text = "[SIGNATURE_BLURRED]"
+                elif entity.label.lower() == "ghost_portrait":
+                    image[y : y + h, x : x + w] = self._blur_ghost_portrait(roi_original)
+                    mitigated_text = "[BLURRED]"
                 else:
                     # Use roi_current so previous erasures are visible (no double text)
                     roi_result, mitigated_text = self._replace_pii_text(roi_current, entity)
@@ -322,6 +328,12 @@ class ImageMitigator:
             elif mapped_style == "aggressive_blur":
                 image[y : y + h, x : x + w] = self._blur_qr(roi_original) if entity.label == "qr_code" else self._aggressive_blur(roi_original)
                 mitigated_text = "[AGGRESSIVE_BLUR]"
+            elif entity.label.lower() == "ghost_portrait":
+                image[y : y + h, x : x + w] = self._blur_ghost_portrait(roi_original)
+                mitigated_text = "[BLURRED]"
+            elif mapped_style in {"erase", "mask"} or entity.label == "mrz_zone":
+                image[y : y + h, x : x + w] = self._erase_region(roi_current)
+                mitigated_text = "[MRZ_ERASED]" if entity.label == "mrz_zone" else "[ERASED]"
             elif mapped_style == "pixelate":
                 image[y : y + h, x : x + w] = self._pixelate_region(roi_original)
                 mitigated_text = "[PIXELATED]"
@@ -367,6 +379,43 @@ class ImageMitigator:
         for _ in range(3):
             result = cv2.GaussianBlur(result, (kernel, kernel), 0)
         return result
+
+    def _blur_ghost_portrait(self, roi: np.ndarray) -> np.ndarray:
+        """Blur ghost portrait / secondary silhouette photo with feathered edge blending."""
+        h, w = roi.shape[:2]
+        if h < 5 or w < 5:
+            return roi
+        k = max(21, (w // 2) * 2 + 1)
+        k = min(k, 101)
+        blurred = cv2.GaussianBlur(roi, (k, k), 10)
+
+        # Feathered alpha mask for seamless natural blending into card guilloche pattern
+        mask = np.zeros((h, w), dtype=np.uint8)
+        margin_x = max(2, int(w * 0.08))
+        margin_y = max(2, int(h * 0.08))
+        mask[margin_y : h - margin_y, margin_x : w - margin_x] = 255
+        feather_k = max(margin_x, margin_y) * 2 + 1
+        mask = cv2.GaussianBlur(mask, (feather_k, feather_k), margin_x * 0.7)
+        alpha = (mask.astype(np.float32) / 255.0)[:, :, None]
+
+        blended = (blurred.astype(np.float32) * alpha + roi.astype(np.float32) * (1.0 - alpha)).astype(np.uint8)
+        return blended
+
+    def _erase_region(self, roi: np.ndarray) -> np.ndarray:
+        """Cleanly erase text / machine-readable zones by inpainting ink strokes to match background."""
+        h, w = roi.shape[:2]
+        if h < 2 or w < 2:
+            return roi
+        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        bg_mean = float(np.mean(roi[0, :]))
+        if bg_mean > 127:
+            _, mask = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        else:
+            _, mask = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        k = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+        mask = cv2.dilate(mask, k, iterations=2)
+        inpainted = cv2.inpaint(roi, mask, 5, cv2.INPAINT_TELEA)
+        return inpainted
 
     # ------------------------------------------------------------------
     # 2. FACE – identity-altering perturbation (primary) or asset swap (fallback)
@@ -899,14 +948,20 @@ class ImageMitigator:
             and h >= 24
         )
 
-        target_w_px = max(int(w * 0.95), w - 4)
+        is_bold = (
+            is_large_aadhaar_number
+            or entity.label.upper() in {"PERSON", "NAME", "PERSON_NAME", "AADHAR", "ID_NUMBER", "LICENSE", "PAN", "DOB", "DATE", "CARDINAL", "ROLL_NUMBER"}
+            or (entity.text and entity.text.isupper() and len(entity.text.strip()) > 2)
+        )
+
+        target_w_px = max(int(w * 0.96), w - 4)
 
         if is_large_aadhaar_number:
-            target_pt = min(20, max(16, int(line_h * 0.58)))
-            is_bold = True
+            target_pt = max(16, min(36, int(line_h * 0.72)))
+        elif num_lines > 1:
+            target_pt = max(8, min(24, int(line_h * 0.70)))
         else:
-            target_pt = min(11, max(9, int(line_h * 0.65)))
-            is_bold = False
+            target_pt = max(10, min(34, int(line_h * 0.72)))
 
         rendered_with_pil = False
         try:
@@ -946,7 +1001,7 @@ class ImageMitigator:
 
             if tw > target_w_px and target_w_px > 20:
                 scale = target_w_px / float(tw)
-                target_pt = max(7, int(target_pt * scale))
+                target_pt = max(5, int(target_pt * scale))
                 pil_font = _load_pil_font(target_pt)
                 if "\n" in fake_text:
                     bb = dummy_draw.multiline_textbbox((0, 0), fake_text, font=pil_font, spacing=3)
@@ -982,8 +1037,8 @@ class ImageMitigator:
 
         if not rendered_with_pil:
             font = cv2.FONT_HERSHEY_DUPLEX
-            font_scale = 0.8 if is_large_aadhaar_number else 0.42
-            thickness = 2 if is_large_aadhaar_number else 1
+            font_scale = 0.85 if is_large_aadhaar_number else max(0.45, min(1.15, line_h / 36.0))
+            thickness = 2 if is_bold else 1
             text_size = cv2.getTextSize(fake_text, font, font_scale, thickness)[0]
             text_x = max(2, (w - text_size[0]) // 2) if is_large_aadhaar_number else max(2, 2)
             text_y = (h + text_size[1]) // 2
@@ -1046,10 +1101,17 @@ class ImageMitigator:
             candidates = (western_female if gender == "female" else western_male) if is_western else (indian_female if gender == "female" else indian_male)
 
             orig_word_count = len(orig.split())
-            matching = [c for c in candidates if len(c.split()) == orig_word_count]
-            if not matching:
-                matching = sorted(candidates, key=lambda c: abs(len(c) - L))
-            chosen = str(np.random.choice(matching)) if matching else candidates[0]
+            if orig_word_count == 1:
+                single_surnames = [
+                    "Sharma", "Kumar", "Patel", "Verma", "Singh", "Reddy",
+                    "Joshi", "Rao", "Iyer", "Deshmukh", "Shetty", "Gowda", "Nair", "Babu"
+                ]
+                chosen = str(np.random.choice(single_surnames))
+            else:
+                matching = [c for c in candidates if len(c.split()) == orig_word_count]
+                if not matching:
+                    matching = sorted(candidates, key=lambda c: abs(len(c) - L))
+                chosen = str(np.random.choice(matching)) if matching else candidates[0]
 
             # Preserve S/O, D/O, W/O, C/O prefix if present
             so_match = re.match(r"^(s/o|d/o|w/o|c/o|son of|daughter of|wife of)[:\s]*", orig, re.IGNORECASE)
@@ -1061,19 +1123,33 @@ class ImageMitigator:
                 return prefix + chosen.upper()
             return prefix + chosen
 
-        # Date of Birth
+        # Date of Birth / Issue / Expiry
         if label == "DOB":
             sep = "/" if "/" in orig else ("-" if "-" in orig else ("." if "." in orig else "/"))
-            year = np.random.randint(1982, 2005)
+            orig_yr_m = re.search(r"\b(19\d\d|20\d\d)\b", orig)
+            if orig_yr_m and int(orig_yr_m.group(1)) > 2024:
+                year = np.random.randint(2028, 2036)
+            elif orig_yr_m and int(orig_yr_m.group(1)) >= 2015:
+                year = np.random.randint(2016, 2024)
+            else:
+                year = np.random.randint(1982, 2005)
             month = np.random.randint(1, 13)
             day = np.random.randint(1, 29)
             if re.match(r"^\d{4}", orig):
                 return f"{year:04d}{sep}{month:02d}{sep}{day:02d}"
             return f"{day:02d}{sep}{month:02d}{sep}{year:04d}"
 
-        # Driving license / Roll number / ID number / PAN card / Enrollment Number
-        if label in {"LICENSE", "ID_NUMBER", "ROLL_NUMBER", "PAN"}:
+        # Driving license / Roll number / ID number / PAN card / Passport / Enrollment Number
+        if label in {"LICENSE", "ID_NUMBER", "ROLL_NUMBER", "PAN", "PASSPORT_NUMBER"}:
             clean_orig = orig.replace(" ", "")
+
+            # Passport number (1 or 2 letters + 6-8 digits, e.g. U6624402, SP003362)
+            if re.fullmatch(r"[A-Z]{1,2}\d{6,8}", clean_orig, re.IGNORECASE) or re.fullmatch(r"[A-PR-WYa-pr-wy][1-9]\d{6,7}", clean_orig, re.IGNORECASE):
+                prefix_len = 2 if len(clean_orig) >= 8 and clean_orig[:2].isalpha() else 1
+                letters = "".join(np.random.choice(list("ABCDEFGHJKLMNPRSTUVWYZ"), prefix_len))
+                digits_count = len(clean_orig) - prefix_len
+                digits = np.random.randint(10 ** (digits_count - 1), (10 ** digits_count) - 1)
+                return f"{letters}{digits}"
 
             # Aadhaar enrollment number (e.g. 2189/42082/02898 or Enrollment No 2189/42082/02898)
             enr_match = re.search(r"(\d{4})/(\d{5})/(\d{5})", orig)

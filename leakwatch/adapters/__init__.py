@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import subprocess
 import shutil
 import tempfile
@@ -205,14 +206,25 @@ class AudioAdapter:
 				if not cleaned_word:
 					continue
 
+				# 1. Exact match from cursor
 				idx = full_text.lower().find(cleaned_word.lower(), char_cursor)
+				match_len = len(cleaned_word)
+
+				# 2. Punctuation-stripped match from cursor
+				if idx == -1:
+					core_word = re.sub(r"^[^\w]+|[^\w]+$", "", cleaned_word)
+					if core_word:
+						idx = full_text.lower().find(core_word.lower(), char_cursor)
+						match_len = len(core_word)
+
+				# 3. Fallback: search anywhere in remaining text
 				if idx != -1:
 					word_char_start = idx
-					word_char_end = idx + len(cleaned_word)
+					word_char_end = idx + match_len
 					char_cursor = word_char_end
 				else:
-					word_char_start = char_cursor
-					word_char_end = char_cursor + len(cleaned_word)
+					word_char_start = min(char_cursor, len(full_text))
+					word_char_end = min(char_cursor + len(cleaned_word), len(full_text))
 					char_cursor = word_char_end
 
 				word_alignment.append({

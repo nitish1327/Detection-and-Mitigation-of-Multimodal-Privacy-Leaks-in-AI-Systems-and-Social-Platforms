@@ -1,8 +1,8 @@
 [
   {
     "label": "PERSON",
-    "start_sec": 0.8916952380952383,
-    "end_sec": 2.266314285714286,
+    "start_sec": 0.8216952380952383,
+    "end_sec": 2.336314285714286,
     "entity_indexes": [
       0
     ],
@@ -13,25 +13,25 @@
   },
   {
     "label": "phone",
-    "start_sec": 5.021400000000001,
-    "end_sec": 6.396019047619048,
-    "entity_indexes": [
-      2
-    ],
-    "entity_ids": [
-      "2:phone:42:52:7676696644"
-    ],
-    "ffmpeg_fallback": false
-  },
-  {
-    "label": "ORG",
-    "start_sec": 11.580342857142858,
-    "end_sec": 12.7535,
+    "start_sec": 4.9514000000000005,
+    "end_sec": 6.587480952380953,
     "entity_indexes": [
       1
     ],
     "entity_ids": [
-      "1:ORG:96:105:Gmail.com"
+      "1:phone:42:53:7676696644"
+    ],
+    "ffmpeg_fallback": false
+  },
+  {
+    "label": "email",
+    "start_sec": 9.324028571428572,
+    "end_sec": 12.7535,
+    "entity_indexes": [
+      2
+    ],
+    "entity_ids": [
+      "2:email:78:105:Ready at the rate Gmail.com"
     ],
     "ffmpeg_fallback": false
   }

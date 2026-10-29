@@ -71,6 +71,14 @@ class PolicyConfig(BaseModel):
         default_factory=list,
         description="Entity labels that should always be masked (handled by core pipeline).",
     )
+    allowlist: list[str] = Field(
+        default_factory=list,
+        description="Custom allowlisted terms that should not be detected or mitigated.",
+    )
+    custom_regex: list[str] = Field(
+        default_factory=list,
+        description="Custom regex patterns to flag during detection.",
+    )
 
 
 class TextScanRequest(BaseModel):
@@ -81,6 +89,10 @@ class TextScanRequest(BaseModel):
     selected_entity_types: list[str] | None = Field(
         default=None,
         description="Entity labels to mitigate. Omit for the legacy behavior of mitigating all detected entities.",
+    )
+    allowlist: list[str] = Field(
+        default_factory=list,
+        description="Dynamic allowlist terms sent from client/policy.",
     )
     policy: PolicyConfig = Field(default_factory=PolicyConfig)
 
@@ -148,9 +160,24 @@ def scan_text(request: TextScanRequest) -> ScanResponse:
         else:
             source_path, scratch_dir = _materialize_file(request.path, request.url, suffix=".txt")
 
-        if request.detect_only or request.selected_entity_types is not None:
+        # Dynamic allowlist from request or policy
+        combined_allowlist = list(request.allowlist or [])
+        if request.policy and request.policy.allowlist:
+            combined_allowlist.extend(request.policy.allowlist)
+        combined_allowlist = [a.strip() for a in combined_allowlist if a and a.strip()]
+
+        if request.detect_only or request.selected_entity_types is not None or combined_allowlist:
             original_text = source_path.read_text(encoding="utf-8")
             detected = PIPELINE.detect_text_entities(original_text)
+            if combined_allowlist:
+                allow_lower = [a.lower() for a in combined_allowlist]
+                detected = [
+                    ent for ent in detected
+                    if not any(
+                        (ent.text and ent.text.lower() in term) or (term in (ent.text or "").lower())
+                        for term in allow_lower
+                    )
+                ]
             detection_result = DetectionResult(
                 source_path=source_path,
                 modality=Modality.TEXT,
@@ -160,10 +187,15 @@ def scan_text(request: TextScanRequest) -> ScanResponse:
 
             if request.detect_only:
                 response.sanitized_text = original_text
+                response.entities = [entity.model_dump() for entity in detected]
                 response.redacted_entities = sorted({entity.label.upper() for entity in detected})
                 return response
 
-            selected_types = {label.strip().upper() for label in request.selected_entity_types or []}
+            selected_types = (
+                {label.strip().upper() for label in request.selected_entity_types}
+                if request.selected_entity_types is not None
+                else {entity.label.upper() for entity in detected}
+            )
             sanitized_text, mitigated_entities = PIPELINE.mitigate_text_entities(
                 original_text,
                 detected,

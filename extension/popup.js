@@ -527,13 +527,45 @@ function displayEntityType(type) {
   return type.replaceAll("_", " ");
 }
 
+function getStoredPolicyAsync() {
+  return new Promise((resolve) => {
+    getStoredPolicy((policy) => resolve(policy || {}));
+  });
+}
+
 async function requestTextScan(text, options = {}) {
+  let storedPolicy = {};
+  try {
+    storedPolicy = await getStoredPolicyAsync();
+  } catch {
+    storedPolicy = {};
+  }
+  let allowlist = Array.isArray(storedPolicy.allowlist) ? [...storedPolicy.allowlist] : [];
+  if (typeof policyAllowlist !== "undefined" && policyAllowlist && policyAllowlist.value) {
+    const liveAllowlist = policyAllowlist.value.split("\n").map((s) => s.trim()).filter(Boolean);
+    if (liveAllowlist.length > 0) {
+      allowlist = [...new Set([...allowlist, ...liveAllowlist])];
+    }
+  }
+  const customRegex = Array.isArray(storedPolicy.custom_regex) ? storedPolicy.custom_regex : [];
+
+  const requestPayload = {
+    text,
+    allowlist,
+    policy: {
+      allowlist,
+      custom_regex: customRegex,
+      ...(options.policy || {}),
+    },
+    ...options,
+  };
+
   const response = await fetchWithTimeout(
     TEXT_SCAN_ENDPOINT,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text, ...options }),
+      body: JSON.stringify(requestPayload),
     },
     TEXT_TIMEOUT_MS
   );
@@ -2139,6 +2171,10 @@ function initPolicyTab() {
       };
 
       saveStoredPolicy(policy, () => {
+        if (typeof videoBlurStrengthSlider !== "undefined" && videoBlurStrengthSlider) {
+          videoBlurStrengthSlider.value = blurStrength;
+          if (videoBlurStrengthVal) videoBlurStrengthVal.textContent = blurStrength;
+        }
         if (policyStatusMsg) {
           policyStatusMsg.textContent = "Settings saved successfully!";
           policyStatusMsg.classList.remove("hidden");

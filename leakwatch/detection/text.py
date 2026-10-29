@@ -24,7 +24,8 @@ NON_PERSON_INTRO_WORDS = {
     "here", "there", "back", "done", "fine", "good", "sorry", "happy", "writing",
     "looking", "working", "interested", "sure", "not", "also", "just", "now",
     "available", "using", "online", "testing", "trying", "ready", "new", "glad",
-    "home", "away", "busy", "well", "okay", "ok", "pleased", "excited", "proud"
+    "home", "away", "busy", "well", "okay", "ok", "pleased", "excited", "proud",
+    "at", "on", "in", "by", "for", "from", "with", "to", "a", "an", "the", "my", "your", "his", "her",
 }
 
 # Known given names commonly misclassified as GPE or missed by Western NLP models
@@ -153,19 +154,40 @@ class TextDetector:
         entities.extend(self._spacy_entities(text))
         entities.extend(self._regex_entities(text))
 
-        spoken_emails = self._detect_spoken_emails(text)
-        if spoken_emails:
+        spoken_pii = self._detect_spoken_pii(text)
+        if spoken_pii:
+            filtered_spoken: list[DetectedEntity] = []
+            for sp in spoken_pii:
+                if not sp.span:
+                    continue
+                exact_match = next(
+                    (
+                        ent for ent in entities
+                        if ent.span and ent.span.start == sp.span.start and ent.span.end == sp.span.end
+                        and ent.label.upper() not in {"CARDINAL", "NUMBERS", "ORG", "GPE", "DATE", "MISC", "NORP"}
+                    ),
+                    None,
+                )
+                if exact_match is None:
+                    filtered_spoken.append(sp)
+
             retained_entities: list[DetectedEntity] = []
             for ent in entities:
                 if ent.span:
                     is_subsumed = any(
-                        se.span and se.span.start <= ent.span.start and ent.span.end <= se.span.end
-                        for se in spoken_emails
+                        sp.span and (
+                            ((sp.span.start < ent.span.start and ent.span.end <= sp.span.end) or (sp.span.start <= ent.span.start and ent.span.end < sp.span.end))
+                            or (
+                                max(sp.span.start, ent.span.start) < min(sp.span.end, ent.span.end)
+                                and ent.label.upper() in {"CARDINAL", "NUMBERS", "ORG", "GPE", "DATE", "MISC", "NORP"}
+                            )
+                        )
+                        for sp in filtered_spoken
                     )
                     if is_subsumed:
                         continue
                 retained_entities.append(ent)
-            entities = retained_entities + spoken_emails
+            entities = retained_entities + filtered_spoken
 
         # Filter out entities that are part of an allowlisted term (case-insensitive)
         allowlist_lower = [term.lower() for term in self.config.allowlist]
@@ -561,4 +583,358 @@ class TextDetector:
                 )
             )
         return entities
+
+    def _detect_pan_cards(self, text: str) -> list[DetectedEntity]:
+        matches: list[DetectedEntity] = []
+        p_pan = re.compile(
+            r"\b([A-Za-z](?:\s*[A-Za-z]){4}\s*\d(?:\s*\d){3}\s*[A-Za-z])\b"
+        )
+        for m in p_pan.finditer(text):
+            val = m.group(1)
+            cleaned = re.sub(r"\s+", "", val)
+            if len(cleaned) == 10 and cleaned[:5].isalpha() and cleaned[5:9].isdigit() and cleaned[9].isalpha():
+                matches.append(
+                    DetectedEntity(
+                        modality=Modality.TEXT,
+                        label="pan",
+                        confidence=0.98,
+                        text=val,
+                        span=Span(start=m.start(1), end=m.end(1)),
+                        mitigation="mask",
+                        detection_method="regex",
+                        metadata={"locale": "en_IN"},
+                    )
+                )
+        return matches
+
+    def _detect_spoken_licenses(self, text: str) -> list[DetectedEntity]:
+        matches: list[DetectedEntity] = []
+        p_context = re.compile(
+            r"\b(?:driving\s+licen[sc]e|licen[sc]e|dl)\b[^\w\n]*?(?:number|no|id|is|:|-|\s)*?\s*([A-Za-z](?:\s*[A-Za-z])(?:\s*[A-Za-z0-9]){10,20})\b",
+            re.IGNORECASE,
+        )
+        for m in p_context.finditer(text):
+            val = m.group(1)
+            cleaned = re.sub(r"[\s.-]+", "", val)
+            if any(c.isdigit() for c in cleaned) and any(c.isalpha() for c in cleaned):
+                matches.append(
+                    DetectedEntity(
+                        modality=Modality.TEXT,
+                        label="license",
+                        confidence=0.95,
+                        text=val,
+                        span=Span(start=m.start(1), end=m.end(1)),
+                        mitigation="replace",
+                        detection_method="regex",
+                        metadata={"locale": "en_IN"},
+                    )
+                )
+
+        p_standalone = re.compile(
+            r"\b([A-Z]{2}[-\s]?[0-9]{2}[-\s]?[0-9]{4}[-\s]?[0-9]{7})\b|"
+            r"\b([A-Z]\s+[A-Z]\s+[0-9]\s+[0-9]\s+(?:[0-9]\s+){10,13}[0-9])\b",
+            re.IGNORECASE,
+        )
+        for m in p_standalone.finditer(text):
+            val = m.group(0)
+            cleaned = re.sub(r"[\s.-]+", "", val)
+            if 13 <= len(cleaned) <= 17 and any(c.isdigit() for c in cleaned) and any(c.isalpha() for c in cleaned):
+                if not any(
+                    prev.span and m.start(0) >= prev.span.start and m.end(0) <= prev.span.end
+                    for prev in matches
+                ):
+                    matches.append(
+                        DetectedEntity(
+                            modality=Modality.TEXT,
+                            label="license",
+                            confidence=0.95,
+                            text=val,
+                            span=Span(start=m.start(0), end=m.end(0)),
+                            mitigation="replace",
+                            detection_method="regex",
+                            metadata={"locale": "en_IN"},
+                        )
+                    )
+        return matches
+
+    def _detect_spoken_passports(self, text: str, occupied: list[tuple[int, int]]) -> list[DetectedEntity]:
+        matches: list[DetectedEntity] = []
+        stopwords = {"is", "as", "us", "in", "it", "at", "to", "or", "so", "no", "if", "by", "my", "he", "we", "be"}
+
+        # Contextual: "passport [no/number/id/is] U 6 6 2 4 4 0 2"
+        p_context = re.compile(
+            r"\b(?:passport)\b[^\w\n]*?(?:number|no|id|code|is|:|-|\s)*?\s*([A-Za-z](?:\s*[A-Za-z])?(?:\s*[-.]?\s*\d){6,8})\b",
+            re.IGNORECASE,
+        )
+        for m in p_context.finditer(text):
+            val = m.group(1)
+            cleaned = re.sub(r"[\s.-]+", "", val)
+            if re.match(r"^[A-Za-z]{1,2}\d{6,8}$", cleaned):
+                matches.append(
+                    DetectedEntity(
+                        modality=Modality.TEXT,
+                        label="passport_number",
+                        confidence=0.98,
+                        text=val,
+                        span=Span(start=m.start(1), end=m.end(1)),
+                        mitigation="replace",
+                        detection_method="regex",
+                    )
+                )
+
+        # Standalone: 1-letter or 2-letter uppercase passports
+        p_standalone = re.compile(
+            r"\b([A-PR-WY]\s*\d(?:\s*\d){6,7})\b|\b([A-Z]\s*[A-Z]\s*\d(?:\s*\d){5,6})\b"
+        )
+        for m in p_standalone.finditer(text):
+            s, e = m.start(0), m.end(0)
+            if any(o_s <= s and e <= o_e for o_s, o_e in occupied):
+                continue
+            val = m.group(0)
+            first_word = val.split()[0].lower()
+            if first_word in stopwords:
+                continue
+            cleaned = re.sub(r"\s+", "", val)
+            if len(cleaned) in {7, 8, 9} and not any(
+                prev.span and s >= prev.span.start and e <= prev.span.end for prev in matches
+            ):
+                matches.append(
+                    DetectedEntity(
+                        modality=Modality.TEXT,
+                        label="passport_number",
+                        confidence=0.95,
+                        text=val,
+                        span=Span(start=s, end=e),
+                        mitigation="replace",
+                        detection_method="regex",
+                    )
+                )
+        return matches
+
+    def _detect_contextual_pii(self, text: str, occupied: list[tuple[int, int]]) -> list[DetectedEntity]:
+        matches: list[DetectedEntity] = []
+        patterns = [
+            (
+                r"\b(?:phone\s+number|mobile\s+number|contact\s+number|whatsapp\s+number|call\s+(?:me\s+)?at|reach\s+(?:me\s+)?at)\b[^\w\n]*?(?:is|:|-|\s)*?\s*(\+?[\d\s-]{7,18}\b)",
+                "phone",
+                "mask",
+            ),
+            (
+                r"\b(?:aadhaar|aadhar|uid|vid)\s*(?:number|no|card|id)?\b[^\w\n]*?(?:is|:|-|\s)*?\s*([\d\s-]{10,18}\b)",
+                "aadhar",
+                "blur",
+            ),
+            (
+                r"\b(?:pan\s+card|pan)\b[^\w\n]*?(?:number|no|id|code|is|:|-|\s)*?\s*([A-Za-z0-9\s-]{10,15}\b)",
+                "pan",
+                "mask",
+            ),
+            (
+                r"\b(?:credit\s+card|debit\s+card|card\s+number)\s*(?:no|number)?\b[^\w\n]*?(?:is|:|-|\s)*?\s*([\d\s-]{13,23}\b)",
+                "credit_card",
+                "mask",
+            ),
+            (
+                r"\b(?:account|bank\s+account|acc\s+no|a/c)\s*(?:number|no)?\b[^\w\n]*?(?:is|:|-|\s)*?\s*([\d\s-]{9,20}\b)",
+                "numbers",
+                "replace",
+            ),
+        ]
+        for pattern_str, label, mitigation in patterns:
+            for m in re.finditer(pattern_str, text, re.IGNORECASE):
+                val = m.group(1).strip()
+                s, e = m.start(1), m.end(1)
+                if any(o_s <= s and e <= o_e for o_s, o_e in occupied):
+                    continue
+                cleaned = re.sub(r"[\s.-]+", "", val)
+                if len(cleaned) < 6:
+                    continue
+                if label == "pan" and not (any(c.isalpha() for c in cleaned) and any(c.isdigit() for c in cleaned)):
+                    continue
+                if label == "phone" and sum(c.isdigit() for c in cleaned) < 7:
+                    continue
+                if label == "aadhar" and sum(c.isdigit() for c in cleaned) < 10:
+                    continue
+                if label == "credit_card" and sum(c.isdigit() for c in cleaned) < 13:
+                    continue
+                if label == "numbers" and sum(c.isdigit() for c in cleaned) < 7:
+                    continue
+
+                matches.append(
+                    DetectedEntity(
+                        modality=Modality.TEXT,
+                        label=label,
+                        confidence=0.96,
+                        text=val,
+                        span=Span(start=s, end=e),
+                        mitigation=mitigation,
+                        detection_method="regex",
+                    )
+                )
+        return matches
+
+    def _detect_spoken_numbers(self, text: str, occupied: list[tuple[int, int]]) -> list[DetectedEntity]:
+        matches: list[DetectedEntity] = []
+        p_spaced = re.compile(r"\b(?:\+?\d{1,3}[ -])?(?:\d[ -]?){6,19}\d\b")
+        for m in p_spaced.finditer(text):
+            s, e = m.start(0), m.end(0)
+            if any(o_s <= s and e <= o_e for o_s, o_e in occupied):
+                continue
+            val = m.group(0)
+            digits_only = re.sub(r"\D", "", val)
+            n = len(digits_only)
+            if n < 7:
+                continue
+            if n == 12 and (val.startswith("+91") or val.startswith("91")):
+                label = "phone"
+                mitigation = "mask"
+            elif n == 10:
+                label = "phone"
+                mitigation = "mask"
+            elif n == 12:
+                label = "aadhar"
+                mitigation = "blur"
+            elif 13 <= n <= 19:
+                label = "credit_card"
+                mitigation = "mask"
+            elif n >= 7:
+                label = "numbers"
+                mitigation = "replace"
+            else:
+                continue
+            matches.append(
+                DetectedEntity(
+                    modality=Modality.TEXT,
+                    label=label,
+                    confidence=0.95,
+                    text=val,
+                    span=Span(start=s, end=e),
+                    mitigation=mitigation,
+                    detection_method="regex",
+                )
+            )
+        return matches
+
+    def _detect_spoken_digit_words(self, text: str) -> list[DetectedEntity]:
+        matches: list[DetectedEntity] = []
+        digit_map = {
+            "zero": "0", "oh": "0",
+            "one": "1", "two": "2", "three": "3", "four": "4",
+            "five": "5", "six": "6", "seven": "7", "eight": "8", "nine": "9",
+        }
+        word_token_pattern = r"(?:(?:double|triple)\s+)?(?:zero|oh|one|two|three|four|five|six|seven|eight|nine)"
+        seq_pattern = re.compile(
+            rf"\b({word_token_pattern}(?:\s+{word_token_pattern}){{6,}})\b",
+            re.IGNORECASE,
+        )
+        for m in seq_pattern.finditer(text):
+            matched_str = m.group(1)
+            tokens = matched_str.lower().split()
+            digit_count = 0
+            multiplier = 1
+            for tok in tokens:
+                if tok == "double":
+                    multiplier = 2
+                elif tok == "triple":
+                    multiplier = 3
+                elif tok in digit_map:
+                    digit_count += multiplier
+                    multiplier = 1
+
+            if digit_count == 10:
+                label = "phone"
+                mitigation = "mask"
+            elif digit_count == 12:
+                label = "aadhar"
+                mitigation = "blur"
+            elif 13 <= digit_count <= 19:
+                label = "credit_card"
+                mitigation = "mask"
+            else:
+                label = "numbers"
+                mitigation = "replace"
+
+            matches.append(
+                DetectedEntity(
+                    modality=Modality.TEXT,
+                    label=label,
+                    confidence=0.92,
+                    text=matched_str,
+                    span=Span(start=m.start(1), end=m.end(1)),
+                    mitigation=mitigation,
+                    detection_method="heuristic",
+                )
+            )
+        return matches
+
+    def _detect_spoken_pii(self, text: str) -> list[DetectedEntity]:
+        if not text:
+            return []
+
+        all_spoken: list[DetectedEntity] = []
+
+        # 1. Spoken emails
+        all_spoken.extend(self._detect_spoken_emails(text))
+
+        # 2. Indian PAN cards
+        pan_entities = self._detect_pan_cards(text)
+        all_spoken.extend(pan_entities)
+
+        # 3. Driving licenses
+        license_entities = self._detect_spoken_licenses(text)
+        all_spoken.extend(license_entities)
+
+        occupied = [
+            (e.span.start, e.span.end) for e in all_spoken if e.span
+        ]
+
+        # 4. Passports (aware of already occupied DL/PAN spans)
+        pass_entities = self._detect_spoken_passports(text, occupied)
+        all_spoken.extend(pass_entities)
+
+        occupied = [
+            (e.span.start, e.span.end) for e in all_spoken if e.span
+        ]
+
+        # 5. Contextual PII (aware of occupied spans)
+        context_entities = self._detect_contextual_pii(text, occupied)
+        all_spoken.extend(context_entities)
+
+        occupied = [
+            (e.span.start, e.span.end) for e in all_spoken if e.span
+        ]
+
+        # 6. Spaced numeric sequences (phones, aadhaar, credit cards, numbers)
+        num_entities = self._detect_spoken_numbers(text, occupied)
+        all_spoken.extend(num_entities)
+
+        # 7. Spoken digit words ("nine eight seven...")
+        word_entities = self._detect_spoken_digit_words(text)
+        all_spoken.extend(word_entities)
+
+        if not all_spoken:
+            return []
+
+        # Merge overlapping spoken matches preferring the longest span
+        valid = [e for e in all_spoken if e.span]
+        valid.sort(key=lambda e: (e.span.start, -(e.span.end - e.span.start)))
+        merged: list[DetectedEntity] = []
+        for ent in valid:
+            assert ent.span
+            if not merged:
+                merged.append(ent)
+                continue
+            prev = merged[-1]
+            assert prev.span
+            if ent.span.start >= prev.span.start and ent.span.end <= prev.span.end:
+                # Fully inside previous; skip
+                continue
+            if ent.span.start < prev.span.end:
+                # Partially overlapping: prefer higher confidence
+                if ent.confidence > prev.confidence:
+                    merged[-1] = ent
+                continue
+            merged.append(ent)
+
+        return merged
 

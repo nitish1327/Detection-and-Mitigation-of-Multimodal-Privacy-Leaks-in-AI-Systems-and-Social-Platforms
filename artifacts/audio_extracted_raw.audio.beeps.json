@@ -1,13 +1,25 @@
 [
   {
     "label": "PERSON",
-    "start_sec": 2.8,
-    "end_sec": 4.14,
+    "start_sec": 0.9899999999999999,
+    "end_sec": 1.97,
     "entity_indexes": [
       0
     ],
     "entity_ids": [
-      "0:PERSON:10:22:kay prilapar"
+      "0:PERSON:14:26:Gawri Ananya"
+    ],
+    "ffmpeg_fallback": false
+  },
+  {
+    "label": "phone",
+    "start_sec": 2.91,
+    "end_sec": 5.630000000000001,
+    "entity_indexes": [
+      1
+    ],
+    "entity_ids": [
+      "1:phone:50:59:767669662"
     ],
     "ffmpeg_fallback": false
   }

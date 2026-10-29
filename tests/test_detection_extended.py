@@ -49,8 +49,8 @@ def test_mrz_detection(detector):
     
     entities = list(detector._detect_mrz(ocr_results))
     
-    # Both lines should match the MRZ pattern/contains "<<"
-    assert len(entities) == 2
+    # Both lines form a unified MRZ zone
+    assert len(entities) == 1
     assert all(e.label == "mrz_zone" for e in entities)
 
 @patch("cv2.imread")

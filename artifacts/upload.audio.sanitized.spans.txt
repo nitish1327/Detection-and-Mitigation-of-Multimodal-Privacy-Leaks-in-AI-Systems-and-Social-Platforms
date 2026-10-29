@@ -1,11 +1,8 @@
 Detected sensitive spans:
 
-- PERSON | mitigation=replace | span=(8, 20)
-  original : Gowne Ananya
-  sanitized: Joseph Brown
-- numbers | mitigation=replace | span=(44, 50)
-  original : 767696644
-  sanitized: 220969
-- ORG | mitigation=replace | span=(94, 107)
-  original : Gmail.com
-  sanitized: Brown-Hampton
+- PERSON | mitigation=replace | span=(18, 32)
+  original : Pranav
+  sanitized: Anthony Garcia
+- phone | mitigation=mask | span=(53, 72)
+  original : 636-056-5598
+  sanitized: +1-964-783-3951x542

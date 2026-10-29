@@ -140,6 +140,8 @@ artifacts/*.audit.json
 artifacts/*.sanitized.png
 artifacts/*.sanitized.overlay.png
 artifacts/*.mp4
+artifacts/scratch*
+artifacts/test_*
 artifacts/*_frames/
 *.ogg
 *.wav

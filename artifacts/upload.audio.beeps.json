@@ -1,1 +1,26 @@
-[]
+[
+  {
+    "label": "PERSON",
+    "start_sec": 2.13,
+    "end_sec": 2.77,
+    "entity_indexes": [
+      1
+    ],
+    "entity_ids": [
+      "1:PERSON:18:24:Pranav"
+    ],
+    "ffmpeg_fallback": false
+  },
+  {
+    "label": "phone",
+    "start_sec": 4.1899999999999995,
+    "end_sec": 7.630000000000001,
+    "entity_indexes": [
+      0
+    ],
+    "entity_ids": [
+      "0:phone:45:57:636-056-5598"
+    ],
+    "ffmpeg_fallback": false
+  }
+]
