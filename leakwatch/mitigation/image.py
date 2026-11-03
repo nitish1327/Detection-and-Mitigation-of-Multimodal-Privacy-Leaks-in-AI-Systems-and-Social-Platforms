@@ -95,8 +95,10 @@ class ImageMitigator:
         # the same bbox.  Rendering all of them would cause overlapping text at
         # wrong sizes.  We keep only the highest-priority entity per bbox.
         _label_priority = {
-            "AADHAR": 0, "aadhar": 0,
+            "AADHAR": 0, "aadhar": 0, "AADHAAR": 0, "aadhaar": 0,
             "id_number": 1, "LICENSE": 1, "license": 1, "roll_number": 1, "pan": 1, "PAN": 1,
+            "passport": 1, "PASSPORT": 1, "passport_number": 1, "PASSPORT_NUMBER": 1,
+            "credit_card": 1, "CREDIT_CARD": 1, "CREDIT": 1, "CARD_NUMBER": 1,
             "dob": 2, "DOB": 2, "DATE": 2,
             "address": 3, "STREET_ADDRESS": 3,
             "PERSON": 4, "NAME": 4, "name": 4, "person_name": 4,
@@ -122,7 +124,7 @@ class ImageMitigator:
             # An ID number, Aadhaar number, or DOB should NEVER absorb an Address or Name.
             def _field_type(lbl: str) -> str:
                 u = lbl.upper()
-                if u in {"AADHAR", "ID_NUMBER", "LICENSE", "PAN", "ROLL_NUMBER"}:
+                if u in {"AADHAR", "AADHAAR", "ID_NUMBER", "LICENSE", "PAN", "ROLL_NUMBER", "PASSPORT", "PASSPORT_NUMBER", "CREDIT_CARD", "CREDIT", "CARD_NUMBER"}:
                     return "id"
                 if u in {"DOB", "DATE"}:
                     return "dob"
@@ -168,8 +170,9 @@ class ImageMitigator:
             is_name_b = fb == "name"
             is_address_a = fa == "address"
             is_address_b = fb == "address"
-            is_dob_or_id_a = a.label in {"dob", "DOB", "AADHAR", "aadhar", "id_number", "LICENSE", "license"}
-            is_dob_or_id_b = b.label in {"dob", "DOB", "AADHAR", "aadhar", "id_number", "LICENSE", "license"}
+            id_labels = {"dob", "DOB", "DATE", "date", "AADHAR", "aadhar", "AADHAAR", "aadhaar", "id_number", "LICENSE", "license", "pan", "PAN", "passport", "PASSPORT", "credit_card", "CREDIT_CARD"}
+            is_dob_or_id_a = a.label in id_labels
+            is_dob_or_id_b = b.label in id_labels
             can_merge_horizontal = False
             if is_name_a and is_name_b:
                 can_merge_horizontal = True
@@ -943,14 +946,21 @@ class ImageMitigator:
         # Only the 12-digit Aadhaar number has larger bold digits (~18-20pt).
         line_h = h / num_lines
         is_large_aadhaar_number = (
-            entity.label.upper() == "AADHAR"
-            and bool(re.search(r"\d{4}\s\d{4}\s\d{4}", fake_text))
+            entity.label.upper() in {"AADHAR", "AADHAAR"}
+            and (
+                bool(re.search(r"[\d\*#@%]{4}\s+[\d\*#@%]{4}\s+[\d\*#@%]{4}", fake_text))
+                or bool(re.search(r"\d{4}\s+\d{4}\s+\d{4}", entity.text or ""))
+            )
             and h >= 24
         )
 
         is_bold = (
             is_large_aadhaar_number
-            or entity.label.upper() in {"PERSON", "NAME", "PERSON_NAME", "AADHAR", "ID_NUMBER", "LICENSE", "PAN", "DOB", "DATE", "CARDINAL", "ROLL_NUMBER"}
+            or entity.label.upper() in {
+                "PERSON", "NAME", "PERSON_NAME", "AADHAR", "AADHAAR", "ID_NUMBER",
+                "LICENSE", "PAN", "DOB", "DATE", "CARDINAL", "ROLL_NUMBER",
+                "PASSPORT", "PASSPORT_NUMBER", "CREDIT_CARD", "CREDIT_CARD_NUMBER"
+            }
             or (entity.text and entity.text.isupper() and len(entity.text.strip()) > 2)
         )
 
@@ -1050,12 +1060,127 @@ class ImageMitigator:
         return erased, fake_text
 
     # ------------------------------------------------------------------
+    # Partial special-character masking helpers for sensitive ID numbers
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _mask_3_to_4_general(orig: str, mask_char: str = "*") -> str:
+        """Fallback: mask 3 to 4 alphanumeric characters in the middle with special characters."""
+        alnum_idx = [i for i, c in enumerate(orig) if c.isalnum()]
+        n = len(alnum_idx)
+        if n >= 8:
+            mid = n // 2
+            mask_set = set(alnum_idx[mid - 2 : mid + 2])
+            return "".join(mask_char if i in mask_set else c for i, c in enumerate(orig))
+        elif n >= 6:
+            count = 4 if n >= 7 else 3
+            mid = n // 2
+            start = max(0, mid - count // 2)
+            mask_set = set(alnum_idx[start : start + count])
+            return "".join(mask_char if i in mask_set else c for i, c in enumerate(orig))
+        elif n >= 3:
+            count = min(4, max(3, n))
+            mask_set = set(alnum_idx[:count])
+            return "".join(mask_char if i in mask_set else c for i, c in enumerate(orig))
+        else:
+            return mask_char * len(orig)
+
+    @staticmethod
+    def _mask_aadhaar(orig: str, mask_char: str = "*") -> str:
+        """Replace 4 digits of Aadhaar number with special characters (e.g. 9006 **** 7320)."""
+        # VID 16 digits: 1234 5678 9012 3456
+        vid_match = re.search(r"(\b\d{4}\s+\d{4}\s+)(\d{4})(\s+\d{4}\b)", orig)
+        if vid_match:
+            return orig[:vid_match.start(2)] + (mask_char * 4) + orig[vid_match.end(2):]
+        # Standard 12-digit spaced: 9006 2534 7320
+        spaced_match = re.search(r"(\b\d{4}\s+)(\d{4})(\s+\d{4}\b)", orig)
+        if spaced_match:
+            return orig[:spaced_match.start(2)] + (mask_char * 4) + orig[spaced_match.end(2):]
+        # Unspaced 12-digit: 900625347320
+        unspaced_match = re.search(r"(\b\d{4})(\d{4})(\d{4}\b)", orig)
+        if unspaced_match:
+            return orig[:unspaced_match.start(2)] + (mask_char * 4) + orig[unspaced_match.end(2):]
+        # Fallback for Aadhaar with digits
+        digits_idx = [i for i, c in enumerate(orig) if c.isdigit()]
+        if len(digits_idx) >= 8:
+            start_d = 4 if len(digits_idx) >= 12 else (len(digits_idx) - 4) // 2
+            mask_indices = set(digits_idx[start_d : start_d + 4])
+            return "".join(mask_char if i in mask_indices else c for i, c in enumerate(orig))
+        return ImageMitigator._mask_3_to_4_general(orig, mask_char)
+
+    @staticmethod
+    def _mask_pan(orig: str, mask_char: str = "*") -> str:
+        """Replace 4 digits of PAN card number with special characters (e.g. BKZPR****K)."""
+        pan_match = re.search(r"([A-Za-z]{5}\s*)(\d{4})(\s*[A-Za-z])", orig)
+        if pan_match:
+            return orig[:pan_match.start(2)] + (mask_char * 4) + orig[pan_match.end(2):]
+        clean_pan = re.search(r"\b([A-Za-z]{5})(\d{4})([A-Za-z])\b", orig)
+        if clean_pan:
+            return orig[:clean_pan.start(2)] + (mask_char * 4) + orig[clean_pan.end(2):]
+        return ImageMitigator._mask_3_to_4_general(orig, mask_char)
+
+    @staticmethod
+    def _mask_passport(orig: str, mask_char: str = "*") -> str:
+        """Replace 3 to 4 characters of passport number with special characters (e.g. U66****2 or SP0****2)."""
+        m = re.search(r"\b([A-Za-z]{1,2}\d{5,8})\b", orig)
+        if m:
+            p_str = m.group(1)
+            p_len = len(p_str)
+            if p_len >= 8:
+                masked_p = p_str[:3] + (mask_char * 4) + p_str[7:]
+            else:
+                masked_p = p_str[:2] + (mask_char * (p_len - 4 if p_len >= 7 else 3)) + p_str[-2:]
+            return orig[:m.start(1)] + masked_p + orig[m.end(1):]
+        clean = orig.replace(" ", "")
+        if len(clean) >= 8:
+            return clean[:3] + (mask_char * 4) + clean[7:]
+        return ImageMitigator._mask_3_to_4_general(orig, mask_char)
+
+    @staticmethod
+    def _mask_driving_license(orig: str, mask_char: str = "*") -> str:
+        """Replace 3 to 4 characters of Driving License number with special characters (e.g. KA01 ****0004521)."""
+        dl_match = re.search(r"([A-Za-z]{2}\d{2,3}\s*)(\d{4})(\s*\d{5,7})", orig)
+        if dl_match:
+            return orig[:dl_match.start(2)] + (mask_char * 4) + orig[dl_match.end(2):]
+        clean = orig.replace(" ", "").replace("-", "")
+        if re.search(r"^[A-Za-z]{2}[0-9O]{12,16}$", clean) or re.search(r"^[A-Za-z]{2}\d{13,15}$", clean):
+            alnum_idx = [i for i, c in enumerate(orig) if c.isalnum()]
+            if len(alnum_idx) >= 10:
+                mid = len(alnum_idx) // 2
+                mask_indices = set(alnum_idx[mid - 2 : mid + 2])
+                return "".join(mask_char if i in mask_indices else c for i, c in enumerate(orig))
+        return ImageMitigator._mask_3_to_4_general(orig, mask_char)
+
+    @staticmethod
+    def _mask_credit_card(orig: str, mask_char: str = "*") -> str:
+        """Replace 4 digits of Credit Card number with special characters (e.g. 4532 1234 **** 9012)."""
+        card_match = re.search(r"(\b\d{4}[ -]\d{4}[ -])(\d{4})([ -]\d{4}\b)", orig)
+        if card_match:
+            return orig[:card_match.start(2)] + (mask_char * 4) + orig[card_match.end(2):]
+        card_match2 = re.search(r"(\d{4}[ -])(\d{4})([ -]\d{4}[ -]\d{4})", orig)
+        if card_match2:
+            return orig[:card_match2.start(2)] + (mask_char * 4) + orig[card_match2.end(2):]
+        cont_match = re.search(r"(\b\d{4}\d{4})(\d{4})(\d{4}\b)", orig)
+        if cont_match:
+            return orig[:cont_match.start(2)] + (mask_char * 4) + orig[cont_match.end(2):]
+        amex_match = re.search(r"(\b\d{4}\s+)(\d{4})(\d{2}\s+\d{5}\b)", orig)
+        if amex_match:
+            return orig[:amex_match.start(2)] + (mask_char * 4) + orig[amex_match.end(2):]
+        digit_idx = [i for i, c in enumerate(orig) if c.isdigit()]
+        if len(digit_idx) >= 13:
+            mid = len(digit_idx) // 2
+            mask_indices = set(digit_idx[mid - 2 : mid + 2])
+            return "".join(mask_char if i in mask_indices else c for i, c in enumerate(orig))
+        return ImageMitigator._mask_3_to_4_general(orig, mask_char)
+
+    # ------------------------------------------------------------------
     # Fake text generation
     # ------------------------------------------------------------------
     def _generate_fake_text(self, entity: DetectedEntity) -> str:
         """Generate contextually appropriate, natural, complete fake text for a PII entity.
 
-        Ensures zero truncated words, zero 'AAAA' padding, and authentic locale formatting.
+        Ensures zero truncated words, zero 'AAAA' padding, authentic locale formatting,
+        and for Aadhaar, PAN, Passport, Driving License, and Credit Card numbers,
+        replaces 3 to 4 characters of the original text with special characters instead of fully faking.
         """
         label = entity.label.upper()
         orig = (entity.text or "").strip()
@@ -1064,19 +1189,54 @@ class ImageMitigator:
         if L == 0:
             return f"<{label}>"
 
-        # Aadhaar: 12 digits (or 16-digit VID), grouped 4 4 4 if original had spaces
-        if label == "AADHAR":
-            d1 = np.random.randint(2000, 9999)
-            d2 = np.random.randint(1000, 9999)
-            d3 = np.random.randint(1000, 9999)
-            digits_only = re.sub(r"\D", "", orig)
-            if len(digits_only) == 16:
-                d4 = np.random.randint(1000, 9999)
-                prefix = "VID : " if "VID" in orig.upper() or "MID" in orig.upper() else ""
-                return f"{prefix}{d1} {d2} {d3} {d4}"
-            if " " in orig or L > 12:
-                return f"{d1} {d2} {d3}"
-            return f"{d1}{d2}{d3}"
+        clean_orig = orig.replace(" ", "")
+        digits_only = re.sub(r"\D", "", orig)
+
+        # 1. Aadhaar number: replace 3 to 4 characters with special characters (don't replace with fake)
+        is_aadhaar = (
+            label in {"AADHAR", "AADHAAR"}
+            or (len(digits_only) == 12 and bool(re.search(r"\b\d{4}\s+\d{4}\s+\d{4}\b", orig)))
+            or (len(digits_only) == 16 and any(k in orig.upper() for k in ["VID", "MID"]))
+            or (label in {"ID_NUMBER", "NUMBERS", "CARDINAL"} and len(digits_only) == 12 and not any(c.isalpha() for c in orig))
+        )
+        if is_aadhaar:
+            return self._mask_aadhaar(orig)
+
+        # 2. Credit Card number: replace 3 to 4 characters with special characters (don't replace with fake)
+        is_cc_label = any(k in label for k in ["CREDIT", "CARD_NUMBER", "DEBIT"])
+        is_cc_text = (
+            bool(re.search(r"\b(?:\d{4}[ -]){3}\d{4}\b", orig))
+            or (len(digits_only) in {15, 16} and (is_cc_label or any(k in orig.lower() for k in ["card", "credit", "visa", "master"])))
+        )
+        if is_cc_label or is_cc_text:
+            return self._mask_credit_card(orig)
+
+        # 3. PAN card number: replace 3 to 4 characters with special characters (don't replace with fake)
+        is_pan_label = label in {"PAN", "PAN_CARD", "PAN_NUMBER"}
+        is_pan_text = bool(re.search(r"\b[A-Z]{5}\s*\d{4}\s*[A-Z]\b", orig, re.IGNORECASE)) or bool(re.fullmatch(r"[A-Z]{5}\d{4}[A-Z]", clean_orig, re.IGNORECASE))
+        if is_pan_label or is_pan_text:
+            return self._mask_pan(orig)
+
+        # 4. Passport number: replace 3 to 4 characters with special characters (don't replace with fake)
+        is_passport_label = label in {"PASSPORT", "PASSPORT_NUMBER"}
+        is_passport_text = (
+            bool(re.fullmatch(r"[A-Z]{1,2}\d{6,8}", clean_orig, re.IGNORECASE))
+            or bool(re.fullmatch(r"[A-PR-WYa-pr-wy][1-9]\d{6,7}", clean_orig, re.IGNORECASE))
+        )
+        if is_passport_label or is_passport_text:
+            return self._mask_passport(orig)
+
+        # 5. Driving license number: replace 3 to 4 characters with special characters (don't replace with fake)
+        is_dl_label = (
+            label in {"LICENSE", "DRIVING_LICENSE", "DRIVING_LICENCE", "DL"}
+            and not any(k in orig.lower() for k in ["enroll", "enrol", "pes"])
+            and not re.search(r"\dUG\d{2}", clean_orig)
+        )
+        dl_match = re.search(r"^([A-Z]{2}\d{2,3})\s*(\d{4})\s*(\d{5,7})$", orig, re.IGNORECASE)
+        clean_no_hyphen = clean_orig.replace("-", "")
+        is_dl_text = bool(dl_match) or bool(re.fullmatch(r"[A-Z]{2}[0-9O]{12,16}", clean_no_hyphen, re.IGNORECASE))
+        if is_dl_label or is_dl_text:
+            return self._mask_driving_license(orig)
 
         # Person name
         if label in {"PERSON", "NAME", "PERSON_NAME"}:
@@ -1145,11 +1305,16 @@ class ImageMitigator:
 
             # Passport number (1 or 2 letters + 6-8 digits, e.g. U6624402, SP003362)
             if re.fullmatch(r"[A-Z]{1,2}\d{6,8}", clean_orig, re.IGNORECASE) or re.fullmatch(r"[A-PR-WYa-pr-wy][1-9]\d{6,7}", clean_orig, re.IGNORECASE):
-                prefix_len = 2 if len(clean_orig) >= 8 and clean_orig[:2].isalpha() else 1
-                letters = "".join(np.random.choice(list("ABCDEFGHJKLMNPRSTUVWYZ"), prefix_len))
-                digits_count = len(clean_orig) - prefix_len
-                digits = np.random.randint(10 ** (digits_count - 1), (10 ** digits_count) - 1)
-                return f"{letters}{digits}"
+                return self._mask_passport(orig)
+
+            # PAN Card (5 letters + 4 digits + 1 letter, e.g. BKZPR4928K)
+            if re.fullmatch(r"[A-Z]{5}\d{4}[A-Z]", clean_orig, re.IGNORECASE):
+                return self._mask_pan(orig)
+
+            # Driving license (e.g. AP00820210048192 or KA01 20180004521)
+            dl_match = re.search(r"^([A-Z]{2}\d{2,3})\s*(\d{4})\s*(\d{5,7})$", orig, re.IGNORECASE)
+            if dl_match:
+                return self._mask_driving_license(orig)
 
             # Aadhaar enrollment number (e.g. 2189/42082/02898 or Enrollment No 2189/42082/02898)
             enr_match = re.search(r"(\d{4})/(\d{5})/(\d{5})", orig)
@@ -1166,21 +1331,6 @@ class ImageMitigator:
                 prefix = pes_match.group(1)
                 num = np.random.randint(100, 599)
                 return f"{prefix}{num:03d}"
-
-            # PAN Card (5 letters + 4 digits + 1 letter, e.g. BKZPR4928K)
-            if re.fullmatch(r"[A-Z]{5}\d{4}[A-Z]", clean_orig):
-                letters1 = "".join(np.random.choice(list("ABCDEFGHJKLMNPQRSTUVWXYZ"), 5))
-                digits = np.random.randint(1000, 9999)
-                letter2 = np.random.choice(list("ABCDEFGHJKLMNPQRSTUVWXYZ"))
-                return f"{letters1}{digits}{letter2}"
-
-            # Driving license (e.g. AP00820210048192 or KA01 20180004521)
-            dl_match = re.search(r"^([A-Z]{2}\d{2,3})\s*(\d{4})\s*(\d{5,7})$", orig)
-            if dl_match:
-                rto, yr, ser = dl_match.groups()
-                new_yr = np.random.randint(2015, 2024)
-                new_ser = np.random.randint(10000, 99999)
-                return f"{rto} {new_yr}{new_ser:07d}" if " " in orig else f"{rto}{new_yr}{new_ser:07d}"
 
             # General alphanumeric ID: preserve length and character classes
             chars = []
@@ -1340,9 +1490,12 @@ class ImageMitigator:
         return np.full_like(roi, 50)
 
     def _blur_region(self, roi: np.ndarray) -> np.ndarray:
-        """Standard Gaussian blur for faces."""
-        kernel = (self.config.face_blur_kernel, self.config.face_blur_kernel)
-        return cv2.GaussianBlur(roi, kernel, 0)
+        """Strong Gaussian blur for faces and sensitive regions."""
+        min_dim = min(roi.shape[0], roi.shape[1])
+        kernel_size = max(51, self.config.face_blur_kernel * 2 + 1, int(min_dim * 0.70))
+        if kernel_size % 2 == 0:
+            kernel_size += 1
+        return cv2.GaussianBlur(roi, (kernel_size, kernel_size), 0)
 
     def _heavy_blur_region(self, roi: np.ndarray) -> np.ndarray:
         """Heavy blur for entire document/card regions — must be unreadable."""

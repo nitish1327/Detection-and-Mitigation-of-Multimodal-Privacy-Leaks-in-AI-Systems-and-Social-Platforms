@@ -668,7 +668,29 @@ class ImageDetector:
                 x_gap = abs(box2.x - (box1.x + box1.width))
                 if y_diff < max(box1.height, box2.height) * 1.5 and x_gap < max(box1.width, box2.width) * 3.0:
                     group.append((idx2, item2))
-            if len(group) == 3:
+            if len(group) == 4:
+                group.sort(key=lambda g: g[1][3].x)
+                merged_text = f"{group[0][1][1]} {group[1][1][1]} {group[2][1][1]} {group[3][1][1]}"
+                min_x = min(g[1][3].x for g in group)
+                min_y = min(g[1][3].y for g in group)
+                max_x2 = max(g[1][3].x + g[1][3].width for g in group)
+                max_y2 = max(g[1][3].y + g[1][3].height for g in group)
+                merged_bbox = BoundingBox(x=min_x, y=min_y, width=max_x2 - min_x, height=max_y2 - min_y)
+                avg_conf = sum(g[1][2] for g in group) / 4.0
+                results.append(
+                    DetectedEntity(
+                        modality=Modality.IMAGE,
+                        label="credit_card",
+                        text=merged_text,
+                        confidence=avg_conf,
+                        bbox=merged_bbox,
+                        mitigation=mit_style,
+                        detection_method="pattern",
+                    )
+                )
+                for g_idx, _ in group:
+                    used_indices.add(g_idx)
+            elif len(group) == 3:
                 group.sort(key=lambda g: g[1][3].x)
                 merged_text = f"{group[0][1][1]} {group[1][1][1]} {group[2][1][1]}"
                 min_x = min(g[1][3].x for g in group)
@@ -710,6 +732,21 @@ class ImageDetector:
                     DetectedEntity(
                         modality=Modality.IMAGE,
                         label="AADHAR",
+                        text=text,
+                        confidence=confidence,
+                        bbox=bbox,
+                        mitigation=mit_style,
+                        detection_method="regex",
+                    )
+                )
+                continue
+
+            # Direct Credit Card match: "4532 1234 5678 9012" or "4532-1234-5678-9012"
+            if re.search(r"\b(?:\d{4}[ -]){3}\d{4}\b", text):
+                results.append(
+                    DetectedEntity(
+                        modality=Modality.IMAGE,
+                        label="credit_card",
                         text=text,
                         confidence=confidence,
                         bbox=bbox,
@@ -771,7 +808,52 @@ class ImageDetector:
                 or bool(re.fullmatch(r"[A-PR-WYa-pr-wy][1-9]\d{6,7}", clean_alnum, re.IGNORECASE))
                 or (mrz_passport_no and (clean_alnum.upper() == mrz_passport_no.upper() or (len(clean_alnum) >= 6 and clean_alnum[1:7] in mrz_passport_no)))
             )
-            if ID_NUMBER_RE.search(text) or is_passport_num or re.search(r"\b[A-Z]{2}[0-9O]{12,16}\b", clean_alnum) or re.search(r"\b[A-Z]{5}\d{4}[A-Z]\b", text):
+            is_pan_num = bool(re.search(r"\b[A-Z]{5}\d{4}[A-Z]\b", text))
+            is_dl_num = bool(re.search(r"\b[A-Z]{2}[0-9O]{12,16}\b", clean_alnum))
+
+            if is_pan_num:
+                results.append(
+                    DetectedEntity(
+                        modality=Modality.IMAGE,
+                        label="PAN",
+                        text=text,
+                        confidence=confidence,
+                        bbox=bbox,
+                        mitigation=mit_style,
+                        detection_method="regex",
+                    )
+                )
+                continue
+
+            if is_passport_num:
+                results.append(
+                    DetectedEntity(
+                        modality=Modality.IMAGE,
+                        label="PASSPORT_NUMBER",
+                        text=text,
+                        confidence=confidence,
+                        bbox=bbox,
+                        mitigation=mit_style,
+                        detection_method="regex",
+                    )
+                )
+                continue
+
+            if is_dl_num:
+                results.append(
+                    DetectedEntity(
+                        modality=Modality.IMAGE,
+                        label="LICENSE",
+                        text=text,
+                        confidence=confidence,
+                        bbox=bbox,
+                        mitigation=mit_style,
+                        detection_method="regex",
+                    )
+                )
+                continue
+
+            if ID_NUMBER_RE.search(text):
                 results.append(
                     DetectedEntity(
                         modality=Modality.IMAGE,

@@ -111,7 +111,7 @@ def run_multimodal_privacy(
     output_path: Path | None = None,
     face_ids: list[int] | None = None,
     mode: str = "blur_all",
-    blur_strength: int = 51,
+    blur_strength: int = 99,
     end_frame: int | None = None,
 ) -> dict[str, Any]:
     """Execute complete multimodal (audio + video) privacy pipeline."""
@@ -301,8 +301,8 @@ def main() -> None:
     parser.add_argument(
         "--blur-strength",
         type=int,
-        default=51,
-        help="Gaussian blur strength (odd integer, default: 51)",
+        default=99,
+        help="Gaussian blur strength (odd integer, default: 99)",
     )
     parser.add_argument(
         "--end-frame",

@@ -120,3 +120,76 @@ def test_face_tweaking_perturbation(tmp_path):
     assert updated[0].mitigation == "replace"
     assert output_path.exists()
 
+
+def test_sensitive_numbers_partial_special_char_masking(tmp_path):
+    path = tmp_path / "card_test.png"
+    img = np.ones((300, 500, 3), dtype=np.uint8) * 240
+    cv2.imwrite(str(path), img)
+
+    config = ImageConfig(default_style="synthetic")
+    mitigator = ImageMitigator(config)
+
+    test_cases = [
+        # (label, original_text, expected_mask, min_special, max_special)
+        ("AADHAR", "9006 2534 7320", "9006 **** 7320", 4, 4),
+        ("AADHAR", "900625347320", "9006****7320", 4, 4),
+        ("PAN", "BKZPR4928K", "BKZPR****K", 4, 4),
+        ("PASSPORT_NUMBER", "U6624402", "U66****2", 3, 4),
+        ("PASSPORT", "SP003362", "SP0****2", 3, 4),
+        ("LICENSE", "KA01 20180004521", "KA01 ****0004521", 4, 4),
+        ("LICENSE", "AP00820210048192", "AP008****0048192", 4, 4),
+        ("credit_card", "4532 1234 5678 9012", "4532 1234 **** 9012", 4, 4),
+        ("CREDIT_CARD", "4532-1234-5678-9012", "4532-1234-****-9012", 4, 4),
+        ("credit_card", "4532123456789012", "45321234****9012", 4, 4),
+    ]
+
+    for idx, (label, orig_text, expected_mask, min_spec, max_spec) in enumerate(test_cases):
+        entity = DetectedEntity(
+            modality=Modality.IMAGE,
+            label=label,
+            confidence=0.98,
+            text=orig_text,
+            bbox=BoundingBox(x=20, y=20 + idx * 25, width=200, height=20),
+        )
+        out_path = tmp_path / f"out_{idx}.png"
+        _, updated = mitigator.mitigate(path, [entity], out_path)
+
+        mitigated_str = updated[0].text
+        # Must not be completely replaced with a fake one
+        assert mitigated_str != orig_text, f"Failed for {label}: text was not mitigated"
+        assert mitigated_str == expected_mask, f"Failed for {label}: expected '{expected_mask}', got '{mitigated_str}'"
+
+        # Count how many characters differ between original and mitigated
+        diffs = [i for i in range(min(len(orig_text), len(mitigated_str))) if orig_text[i] != mitigated_str[i]]
+        diff_count = len(diffs)
+        assert min_spec <= diff_count <= max_spec, f"Expected {min_spec} to {max_spec} characters replaced, got {diff_count}"
+
+        # Replaced characters must be special characters
+        for i in diffs:
+            assert not mitigated_str[i].isalnum(), f"Expected special character at position {i}, got '{mitigated_str[i]}'"
+
+
+def test_person_name_still_uses_synthetic_name(tmp_path):
+    path = tmp_path / "name_test.png"
+    img = np.ones((100, 300, 3), dtype=np.uint8) * 240
+    cv2.imwrite(str(path), img)
+
+    config = ImageConfig(default_style="synthetic")
+    mitigator = ImageMitigator(config)
+
+    entity = DetectedEntity(
+        modality=Modality.IMAGE,
+        label="PERSON",
+        confidence=0.95,
+        text="Arjun Sharma",
+        bbox=BoundingBox(x=20, y=20, width=150, height=25),
+    )
+    out_path = tmp_path / "name_out.png"
+    _, updated = mitigator.mitigate(path, [entity], out_path)
+
+    mitigated_str = updated[0].text
+    # Name should be replaced with synthetic name (not asterisks)
+    assert "*" not in mitigated_str
+    assert mitigated_str != "Arjun Sharma"
+
+

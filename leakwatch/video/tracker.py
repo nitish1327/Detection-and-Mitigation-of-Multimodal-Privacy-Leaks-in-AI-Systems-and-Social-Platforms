@@ -42,7 +42,7 @@ def ensure_yunet_model(target_path: Path | None = None) -> str:
 def create_face_detector(
     width: int = 320,
     height: int = 320,
-    score_threshold: float = 0.22,
+    score_threshold: float = 0.65,
     nms_threshold: float = 0.3,
     top_k: int = 5000,
 ) -> cv2.FaceDetectorYN:
@@ -62,8 +62,14 @@ def create_face_detector(
 def detect_faces(
     frame: np.ndarray,
     detector: cv2.FaceDetectorYN,
+    min_confidence: float = 0.65,
 ) -> List[Tuple[int, int, int, int]]:
-    """Return a list of (x, y, w, h) face bounding boxes in the frame."""
+    """Return a list of validated (x, y, w, h) face bounding boxes in the frame.
+
+    Filters out false positives (hands, palms, fingers, chest, clothing folds)
+    using confidence thresholding, skin-tone distribution analysis, and
+    anatomical facial landmark consistency.
+    """
     if frame is None or frame.size == 0:
         return []
     h, w = frame.shape[:2]
@@ -71,10 +77,63 @@ def detect_faces(
     _, raw = detector.detect(frame)
     if raw is None:
         return []
-    return [
-        (int(face[0]), int(face[1]), int(face[2]), int(face[3]))
-        for face in raw
-    ]
+
+    valid_faces: List[Tuple[int, int, int, int]] = []
+    for face in raw:
+        fx, fy, fw, fh = int(face[0]), int(face[1]), int(face[2]), int(face[3])
+        score = float(face[-1]) if len(face) > 4 else 1.0
+
+        # Discard low-confidence candidates (e.g. hands, clothing, background folds)
+        if score < min_confidence:
+            continue
+
+        # Discard degenerate or extremely small noise boxes
+        if fw < 16 or fh < 16:
+            continue
+
+        # Discard extreme aspect ratios (human faces are roughly 0.40 <= w/h <= 1.60)
+        aspect = fw / float(fh)
+        if aspect < 0.40 or aspect > 1.60:
+            continue
+
+        # Discard non-skin regions (e.g. dark shirts, lanyards, background objects)
+        x1 = max(0, fx + int(fw * 0.2))
+        y1 = max(0, fy + int(fh * 0.2))
+        x2 = min(w, fx + int(fw * 0.8))
+        y2 = min(h, fy + int(fh * 0.8))
+        if x2 <= x1 or y2 <= y1:
+            continue
+
+        roi = frame[y1:y2, x1:x2]
+        ycrcb = cv2.cvtColor(roi, cv2.COLOR_BGR2YCrCb)
+        skin_mask = cv2.inRange(ycrcb, (0, 133, 77), (255, 173, 127))
+        skin_ratio = float((skin_mask > 0).mean())
+        if skin_ratio < 0.25:
+            continue
+
+        # Landmark consistency: right eye, left eye, nose, and mouth vertical alignment
+        if len(face) >= 15:
+            re_x, re_y = face[4], face[5]
+            le_x, le_y = face[6], face[7]
+            nt_x, nt_y = face[8], face[9]
+            rm_x, rm_y = face[10], face[11]
+            lcm_x, lcm_y = face[12], face[13]
+
+            eye_dist = ((re_x - le_x) ** 2 + (re_y - le_y) ** 2) ** 0.5
+            # Eye distance should be positive and reasonable relative to face width
+            if eye_dist < 4.0 or eye_dist > fw * 0.85:
+                continue
+
+            # Vertical structure: eyes must be vertically separated from mouth
+            eye_y = (re_y + le_y) / 2.0
+            mouth_y = (rm_y + lcm_y) / 2.0
+            vert_dist = mouth_y - eye_y
+            if vert_dist < fh * 0.10:
+                continue
+
+        valid_faces.append((fx, fy, fw, fh))
+
+    return valid_faces
 
 
 class FaceTracker:
@@ -207,19 +266,20 @@ class FaceTracker:
 def blur_region(
     frame: np.ndarray,
     bbox: Tuple[int, int, int, int],
-    strength: int = 51,
+    strength: int = 99,
 ) -> np.ndarray:
-    """Apply elliptical Gaussian blur to the bbox region of the frame (in-place).
+    """Apply heavy elliptical Gaussian blur to the bbox region of the frame (in-place).
 
     Expands the bounding box slightly to cover forehead/chin, and uses an
-    elliptical mask with soft edges for a natural-looking blur.
+    elliptical mask with soft edges for a natural-looking, de-identifying blur
+    that renders the person difficult to identify while blending seamlessly.
     """
     fh, fw = frame.shape[:2]
     x, y, w, h = bbox
 
     # Expand slightly beyond face bbox to cover forehead/chin
-    pad_w = int(w * 0.15)
-    pad_h = int(h * 0.20)
+    pad_w = int(w * 0.10)
+    pad_h = int(h * 0.10)
     x1 = max(0, x - pad_w)
     y1 = max(0, y - pad_h)
     x2 = min(fw, x + w + pad_w)
@@ -229,16 +289,34 @@ def blur_region(
         return frame
 
     roi = frame[y1:y2, x1:x2].copy()
-    k = strength if strength % 2 == 1 else strength + 1
+    rh, rw = roi.shape[:2]
+    min_dim = min(rh, rw)
+
+    # Ensure kernel scales with ROI and is strong enough to obscure facial identity
+    effective_strength = max(strength, 99)
+    k = max(effective_strength, int(min_dim * 0.65))
+    if k % 2 == 0:
+        k += 1
     blurred = cv2.GaussianBlur(roi, (k, k), 0)
 
+    # Second pass with proportional kernel for thorough obscuration of facial identity
+    k2 = max(31, (k // 2) | 1)
+    blurred = cv2.GaussianBlur(blurred, (k2, k2), 0)
+
     # Create elliptical mask for smooth blending
-    rh, rw = roi.shape[:2]
     mask = np.zeros((rh, rw), dtype=np.float32)
     center = (rw // 2, rh // 2)
-    axes = (rw // 2, rh // 2)
+    axes = (int(rw * 0.48), int(rh * 0.48))
     cv2.ellipse(mask, center, axes, 0, 0, 360, 1.0, -1)
-    mask = cv2.GaussianBlur(mask, (15, 15), 0)
+
+    # Soft feather at outer edges
+    feather = max(7, min(25, (min_dim // 10) | 1))
+    mask = cv2.GaussianBlur(mask, (feather, feather), 0)
+
+    # Ensure the inner core face region is fully obscured (1.0) to prevent feature leakage
+    inner_axes = (int(rw * 0.38), int(rh * 0.38))
+    cv2.ellipse(mask, center, inner_axes, 0, 0, 360, 1.0, -1)
+    mask = np.clip(mask, 0.0, 1.0)
 
     # If the region touches image borders, ensure full blur coverage at boundary
     if x1 == 0:
@@ -254,6 +332,7 @@ def blur_region(
     blended = (blurred * mask_3ch + roi * (1.0 - mask_3ch)).astype(np.uint8)
     frame[y1:y2, x1:x2] = blended
     return frame
+
 
 
 def generate_synthetic_replacement(label: str, orig_text: str | None = None) -> str:
@@ -934,7 +1013,7 @@ def process_selective_video(
     output_path: Path | str,
     selected_face_ids: Sequence[int],
     mode: str = "blur_selected",
-    blur_strength: int = 51,
+    blur_strength: int = 99,
     redact_sensitive_info: bool = True,
     mitigate_audio: bool = False,
     pipeline_manager: Any = None,

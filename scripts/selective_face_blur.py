@@ -178,8 +178,8 @@ def main() -> None:
                         help="Last frame to blur (1-indexed). Default: blur through the entire video.")
     parser.add_argument("--output", type=str, default=None,
                         help="Output video path. Default: <input>.face_blurred.mp4")
-    parser.add_argument("--blur-strength", type=int, default=51,
-                        help="Gaussian blur kernel size (odd number, higher = stronger). Default: 51")
+    parser.add_argument("--blur-strength", type=int, default=99,
+                        help="Gaussian blur kernel size (odd number, higher = stronger). Default: 99")
     parser.add_argument("--face", type=str, default=None,
                         help="Face number(s) to blur (1-indexed, comma-separated). "
                              "Examples: --face 1  or  --face 1,3,5. "

@@ -1948,7 +1948,7 @@ async function handleSelectiveSanitize(options = {}) {
   const isBlurAll = Boolean(options && options.blurAll);
   const modeRadio = document.querySelector('input[name="video-mode"]:checked');
   const mode = isBlurAll ? "blur_all" : (modeRadio ? modeRadio.value : "blur_selected");
-  const blurStrength = videoBlurStrengthSlider ? videoBlurStrengthSlider.value : 51;
+  const blurStrength = videoBlurStrengthSlider ? videoBlurStrengthSlider.value : 99;
   const faceIdsArray = isBlurAll ? [] : Array.from(selectedFaceIds);
 
   if (mode === "blur_selected" && faceIdsArray.length === 0) {

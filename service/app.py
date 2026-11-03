@@ -418,7 +418,7 @@ async def scan_video_upload(file: UploadFile = File(...)) -> ScanResponse:
             output_path=output_path,
             selected_face_ids=[],
             mode="blur_all",
-            blur_strength=51,
+            blur_strength=99,
             redact_sensitive_info=True,
             mitigate_audio=True,
             pipeline_manager=PIPELINE,
@@ -537,7 +537,7 @@ async def scan_video_selective(request: Request) -> dict[str, Any]:
     scratch_dir: Path | None = None
     selected_faces: list[int] = []
     mode: str = "blur_selected"
-    blur_strength: int = 51
+    blur_strength: int = 99
     redact_sensitive_info: bool = True
     mitigate_audio: bool = True
 
@@ -573,9 +573,9 @@ async def scan_video_selective(request: Request) -> dict[str, Any]:
             if "mitigate_audio" in form:
                 mitigate_audio = str(form.get("mitigate_audio", "true")).lower() in ("true", "1", "yes")
             try:
-                blur_strength = int(form.get("blur_strength", 51))
+                blur_strength = int(form.get("blur_strength", 99))
             except (ValueError, TypeError):
-                blur_strength = 51
+                blur_strength = 99
 
         elif "application/json" in content_type:
             try:
@@ -592,9 +592,9 @@ async def scan_video_selective(request: Request) -> dict[str, Any]:
             if "mitigate_audio" in body:
                 mitigate_audio = bool(body.get("mitigate_audio"))
             try:
-                blur_strength = int(body.get("blur_strength", 51))
+                blur_strength = int(body.get("blur_strength", 99))
             except (ValueError, TypeError):
-                blur_strength = 51
+                blur_strength = 99
 
         else:
             form = await request.form()
@@ -608,7 +608,7 @@ async def scan_video_selective(request: Request) -> dict[str, Any]:
                 source_path.write_bytes(raw)
                 selected_faces = _parse_face_selection(form.get("selected_faces"))
                 mode = str(form.get("mode", "blur_selected")).strip()
-                blur_strength = int(form.get("blur_strength", 51))
+                blur_strength = int(form.get("blur_strength", 99))
                 if "redact_sensitive_info" in form:
                     redact_sensitive_info = str(form.get("redact_sensitive_info", "true")).lower() in ("true", "1", "yes")
                 if "mitigate_audio" in form:
