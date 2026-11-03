@@ -951,7 +951,7 @@ class ImageMitigator:
             and h >= 24
         )
 
-lbl_upper = entity.label.upper()
+        lbl_upper = entity.label.upper()
         is_bold = (
             is_large_aadhaar_number
             or any(k in lbl_upper for k in ("PERSON", "NAME", "AADHAR", "AADHAAR", "PAN", "ID", "ROLL", "LICENSE", "CARDINAL", "NUMBER", "PASSPORT", "CREDIT_CARD", "DOB", "DATE"))
@@ -1007,7 +1007,7 @@ lbl_upper = entity.label.upper()
             # If replacement text overflows the bounding box width, scale down proportionally
             if tw > target_w_px and target_w_px > 10:
                 scale = target_w_px / float(tw)
-target_pt = max(6, int(target_pt * scale))
+                target_pt = max(6, int(target_pt * scale))
                 pil_font = _load_pil_font(target_pt)
                 if "\n" in fake_text:
                     bb = dummy_draw.multiline_textbbox((0, 0), fake_text, font=pil_font, spacing=3)
@@ -1045,7 +1045,7 @@ target_pt = max(6, int(target_pt * scale))
 
         if not rendered_with_pil:
             font = cv2.FONT_HERSHEY_DUPLEX
-font_scale = max(0.35, min(2.5, line_h / 32.0))
+            font_scale = max(0.35, min(2.5, line_h / 32.0))
             thickness = 2 if is_bold else 1
             text_size = cv2.getTextSize(fake_text, font, font_scale, thickness)[0]
             if text_size[0] > target_w_px and target_w_px > 10:
