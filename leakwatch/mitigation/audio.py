@@ -57,6 +57,7 @@ class AudioMitigator:
         entities: list[DetectedEntity],
         output_path: Path,
         word_timestamps: list[dict[str, Any]] | None = None,
+        mask_style: str | None = None,
     ) -> tuple[Path, list[dict[str, float]]]:
         source_path = Path(audio_path)
         normalized_path, cleanup_path, fallback_used = self._normalize_for_beeping(source_path)
@@ -79,7 +80,7 @@ class AudioMitigator:
         samples = array("h")
         samples.frombytes(raw_frames)
 
-        mask_style = getattr(self.config, "mask_style", "beep").lower()
+        mask_style = (mask_style or getattr(self.config, "mask_style", "beep") or "beep").lower()
         amplitude = self.config.beep_amplitude
         import random
 

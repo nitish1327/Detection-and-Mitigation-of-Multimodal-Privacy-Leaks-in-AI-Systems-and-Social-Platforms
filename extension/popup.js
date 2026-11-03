@@ -8,6 +8,7 @@ const VIDEO_UPLOAD_ENDPOINT = `${BACKEND_BASE}/scan/video/upload`;
 const VIDEO_PREVIEW_FACES_ENDPOINT = `${BACKEND_BASE}/scan/video/preview-faces`;
 const VIDEO_SELECTIVE_ENDPOINT = `${BACKEND_BASE}/scan/video/selective`;
 const HEALTH_ENDPOINT = `${BACKEND_BASE}/health`;
+const POLICY_ENDPOINT = `${BACKEND_BASE}/policy`;
 const TEXT_TIMEOUT_MS = 15000;
 const IMAGE_TIMEOUT_MS = 120000;
 const AUDIO_TIMEOUT_MS = 120000;
@@ -100,6 +101,7 @@ const lightboxVideo = document.getElementById("lightbox-video");
 
 // Audio tab
 const audioInput = document.getElementById("audio-input");
+const audioMaskStyle = document.getElementById("audio-mask-style");
 const audioSanitizeBtn = document.getElementById("audio-sanitize-btn");
 const audioPreviewPanel = document.getElementById("audio-preview-panel");
 const sanitizedAudioEl = document.getElementById("sanitized-audio");
@@ -1377,6 +1379,19 @@ function initAudioTab() {
   audioInput.addEventListener("change", handleAudioSelected);
   audioSanitizeBtn.addEventListener("click", handleAudioSanitize);
   audioDownloadBtn.addEventListener("click", handleDownloadAudio);
+  if (audioMaskStyle) {
+    getStoredPolicy((policy) => {
+      if (policy && policy.audio_mask_style) {
+        audioMaskStyle.value = policy.audio_mask_style;
+      }
+    });
+    audioMaskStyle.addEventListener("change", () => {
+      getStoredPolicy((policy) => {
+        policy.audio_mask_style = audioMaskStyle.value;
+        saveStoredPolicy(policy);
+      });
+    });
+  }
   if (audioRecordBtn) {
     audioRecordBtn.addEventListener("click", handleToggleAudioRecording);
   }
@@ -1646,7 +1661,8 @@ async function handleAudioSanitize() {
   audioDownloadBtn.disabled = true;
 
   try {
-    const result = await sanitizeMedia(selectedAudioFile, AUDIO_UPLOAD_ENDPOINT, AUDIO_TIMEOUT_MS);
+    const maskStyle = audioMaskStyle ? audioMaskStyle.value : "beep";
+    const result = await sanitizeMedia(selectedAudioFile, AUDIO_UPLOAD_ENDPOINT, AUDIO_TIMEOUT_MS, { mask_style: maskStyle });
     const blob = await resolveSanitizedMediaBlob(result, "audio/wav", AUDIO_TIMEOUT_MS);
     if (sanitizedAudioUrl) {
       URL.revokeObjectURL(sanitizedAudioUrl);
@@ -2054,9 +2070,16 @@ function handleDownloadVideo() {
 }
 
 // Shared media helper functions
-async function sanitizeMedia(file, endpoint, timeoutMs) {
+async function sanitizeMedia(file, endpoint, timeoutMs, extraFields = {}) {
   const formData = new FormData();
   formData.append("file", file, file.name);
+  if (extraFields && typeof extraFields === "object") {
+    for (const [key, value] of Object.entries(extraFields)) {
+      if (value !== undefined && value !== null) {
+        formData.append(key, value);
+      }
+    }
+  }
 
   const response = await fetchWithTimeout(
     endpoint,
@@ -2101,6 +2124,7 @@ const policyRegex = document.getElementById("policy-regex");
 const policyBlurStrength = document.getElementById("policy-blur-strength");
 const blurStrengthVal = document.getElementById("blur-strength-val");
 const policyAudioMask = document.getElementById("policy-audio-mask");
+const policyAuditHash = document.getElementById("policy-audit-hash");
 const policySaveBtn = document.getElementById("policy-save-btn");
 const policyResetBtn = document.getElementById("policy-reset-btn");
 const policyStatusMsg = document.getElementById("policy-status-msg");
@@ -2140,6 +2164,16 @@ function initPolicyTab() {
     });
   }
 
+  // Fetch current live policy from backend if reachable
+  fetchWithTimeout(POLICY_ENDPOINT, { method: "GET" }, 3000)
+    .then((res) => (res.ok ? res.json() : null))
+    .then((data) => {
+      if (data && typeof data.audit_span_hash === "boolean" && policyAuditHash) {
+        policyAuditHash.checked = data.audit_span_hash;
+      }
+    })
+    .catch(() => {});
+
   getStoredPolicy((policy) => {
     if (policyAllowlist && policy.allowlist) {
       policyAllowlist.value = policy.allowlist.join("\n");
@@ -2154,6 +2188,9 @@ function initPolicyTab() {
     if (policyAudioMask && policy.audio_mask_style) {
       policyAudioMask.value = policy.audio_mask_style;
     }
+    if (policyAuditHash && typeof policy.audit_span_hash === "boolean") {
+      policyAuditHash.checked = policy.audit_span_hash;
+    }
   });
 
   if (policySaveBtn) {
@@ -2161,14 +2198,33 @@ function initPolicyTab() {
       const allowlist = policyAllowlist ? policyAllowlist.value.split("\n").map(s => s.trim()).filter(Boolean) : [];
       const regexRules = policyRegex ? policyRegex.value.split("\n").map(s => s.trim()).filter(Boolean) : [];
       const blurStrength = policyBlurStrength ? parseInt(policyBlurStrength.value, 10) : 51;
-      const audioMask = policyAudioMask ? policyAudioMask.value : "beep";
+      const audioMask = audioMaskStyle ? audioMaskStyle.value : (policyAudioMask ? policyAudioMask.value : "beep");
+      const auditSpanHash = policyAuditHash ? Boolean(policyAuditHash.checked) : false;
 
       const policy = {
         allowlist,
         custom_regex: regexRules,
         blur_strength: blurStrength,
         audio_mask_style: audioMask,
+        audit_span_hash: auditSpanHash,
       };
+
+      // Sync settings with local backend
+      fetchWithTimeout(
+        POLICY_ENDPOINT,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            allowlist,
+            custom_regex: regexRules,
+            blur_strength: blurStrength,
+            audio_mask_style: audioMask,
+            audit_span_hash: auditSpanHash,
+          }),
+        },
+        5000
+      ).catch((err) => console.warn("Failed to sync policy to backend:", err));
 
       saveStoredPolicy(policy, () => {
         if (typeof videoBlurStrengthSlider !== "undefined" && videoBlurStrengthSlider) {
@@ -2193,6 +2249,19 @@ function initPolicyTab() {
         if (blurStrengthVal) blurStrengthVal.textContent = "51";
       }
       if (policyAudioMask) policyAudioMask.value = "beep";
+      if (audioMaskStyle) audioMaskStyle.value = "beep";
+      if (policyAuditHash) policyAuditHash.checked = false;
+
+      fetchWithTimeout(
+        POLICY_ENDPOINT,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ audit_span_hash: false }),
+        },
+        5000
+      ).catch(() => {});
+
       saveStoredPolicy({}, () => {
         if (policyStatusMsg) {
           policyStatusMsg.textContent = "Reset to default settings.";

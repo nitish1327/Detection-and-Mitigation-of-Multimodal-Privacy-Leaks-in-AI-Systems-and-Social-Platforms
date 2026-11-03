@@ -7,7 +7,6 @@
 
 chrome.runtime.onInstalled.addListener(() => {
   console.info("[Privacy Sandbox] Extension installed. Backend: http://localhost:8000");
-  chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
 });
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {

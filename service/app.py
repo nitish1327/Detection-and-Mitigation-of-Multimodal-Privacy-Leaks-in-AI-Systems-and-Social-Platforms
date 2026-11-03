@@ -112,6 +112,10 @@ class FileScanRequest(BaseModel):
         default=None,
         description="Entity labels to mitigate.",
     )
+    mask_style: str | None = Field(
+        default=None,
+        description="Audio masking strategy override.",
+    )
 
     @model_validator(mode="after")
     def validate_source(self) -> "FileScanRequest":
@@ -146,6 +150,43 @@ class SelectiveVideoScanResponse(ScanResponse):
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "service": "leakwatch"}
+
+
+class PolicyUpdateRequest(BaseModel):
+    allowlist: list[str] | None = None
+    custom_regex: list[str] | None = None
+    blur_strength: int | None = None
+    audio_mask_style: str | None = None
+    audit_span_hash: bool | None = None
+
+
+@app.get("/policy")
+def get_policy() -> dict[str, Any]:
+    return {
+        "status": "ok",
+        "audit_span_hash": PIPELINE.config.explainability.audit_span_text_policy.lower() == "hash",
+        "audit_span_text_policy": PIPELINE.config.explainability.audit_span_text_policy,
+        "blur_strength": PIPELINE.config.image.face_blur_kernel,
+        "allowlist": list(PIPELINE.config.text.allowlist or []),
+    }
+
+
+@app.post("/policy")
+def update_policy(req: PolicyUpdateRequest) -> dict[str, Any]:
+    if req.audit_span_hash is not None:
+        PIPELINE.config.explainability.audit_span_text_policy = "hash" if req.audit_span_hash else "plain"
+    if req.blur_strength is not None:
+        PIPELINE.config.image.face_blur_kernel = req.blur_strength
+    if req.allowlist is not None:
+        PIPELINE.config.text.allowlist = req.allowlist
+        if hasattr(PIPELINE.text_detector, "allowlist"):
+            PIPELINE.text_detector.allowlist = {term.strip().lower() for term in req.allowlist if term.strip()}
+    return {
+        "status": "ok",
+        "audit_span_hash": PIPELINE.config.explainability.audit_span_text_policy.lower() == "hash",
+        "audit_span_text_policy": PIPELINE.config.explainability.audit_span_text_policy,
+        "blur_strength": PIPELINE.config.image.face_blur_kernel,
+    }
 
 
 @app.post("/scan/text", response_model=ScanResponse)
@@ -201,6 +242,14 @@ def scan_text(request: TextScanRequest) -> ScanResponse:
                 detected,
                 selected_types,
             )
+            mitigated_result = DetectionResult(
+                source_path=source_path,
+                modality=Modality.TEXT,
+                entities=mitigated_entities,
+            )
+            PIPELINE._attach_audit(mitigated_result)
+            if mitigated_result.audit_log:
+                response.artifacts.append(str(mitigated_result.audit_log))
             response.sanitized_text = sanitized_text
             response.entities = [entity.model_dump() for entity in mitigated_entities]
             response.redacted_entities = sorted({entity.label.upper() for entity in mitigated_entities})
@@ -328,7 +377,7 @@ async def scan_image_upload(
 def scan_audio(request: FileScanRequest) -> ScanResponse:
     source_path, scratch_dir = _materialize_file(request.path, request.url, suffix=".wav")
     try:
-        result = PIPELINE.process_audio(source_path)
+        result = PIPELINE.process_audio(source_path, mask_style=request.mask_style)
         response = _build_response(result, request.policy)
         _attach_download_payload(response, result)
         return response
@@ -339,7 +388,10 @@ def scan_audio(request: FileScanRequest) -> ScanResponse:
 
 
 @app.post("/scan/audio/upload", response_model=ScanResponse)
-async def scan_audio_upload(file: UploadFile = File(...)) -> ScanResponse:
+async def scan_audio_upload(
+    file: UploadFile = File(...),
+    mask_style: str | None = Form(None),
+) -> ScanResponse:
     """Accept browser-uploaded audio via multipart/form-data (field name: file)."""
     if not file.filename:
         raise HTTPException(status_code=400, detail="Audio filename is required.")
@@ -360,7 +412,7 @@ async def scan_audio_upload(file: UploadFile = File(...)) -> ScanResponse:
     source_path.write_bytes(raw)
 
     try:
-        result = PIPELINE.process_audio(source_path)
+        result = PIPELINE.process_audio(source_path, mask_style=mask_style)
         response = _build_response(result, PolicyConfig())
         _attach_download_payload(response, result)
         return response

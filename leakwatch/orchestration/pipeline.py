@@ -266,7 +266,7 @@ class PipelineManager:
         )
 
     # --- Audio Modality ----------------------------------------------
-    def process_audio(self, path: Path) -> DetectionResult:
+    def process_audio(self, path: Path, mask_style: str | None = None) -> DetectionResult:
         if not self.config.audio.enabled:
             raise RuntimeError("Audio modality disabled in configuration.")
         source_path = Path(path)
@@ -292,6 +292,7 @@ class PipelineManager:
             detected_entities,
             beeped_audio_path,
             word_timestamps=getattr(self.audio_adapter, "last_word_timestamps", None),
+            mask_style=mask_style,
         )
 
         artifacts: list[Path] = [transcript_path, sanitized_text_path]
