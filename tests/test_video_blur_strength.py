@@ -4,7 +4,7 @@ import cv2
 import numpy as np
 import pytest
 
-from leakwatch.video.tracker import blur_region
+from leakwatch.video.tracker import SensitiveTextTracker, blur_region
 
 
 def test_video_face_blur_strength_obscures_identity() -> None:
@@ -64,3 +64,43 @@ def test_video_face_blur_handles_boundary_and_invalid_boxes() -> None:
     assert out2.shape == frame.shape
     assert not np.isnan(out2).any()
 
+
+def test_blur_region_accepts_blur_strength_kwarg() -> None:
+    """Verify blur_region accepts both strength and blur_strength kwargs without error."""
+    frame = np.full((100, 100, 3), 128, dtype=np.uint8)
+    
+    # Using strength kwarg
+    out1 = blur_region(frame.copy(), (10, 10, 30, 30), strength=75)
+    assert out1.shape == frame.shape
+
+    # Using blur_strength kwarg
+    out2 = blur_region(frame.copy(), (10, 10, 30, 30), blur_strength=85)
+    assert out2.shape == frame.shape
+
+    # Using elliptical=False for rectangular entities (barcodes, signatures)
+    out3 = blur_region(frame.copy(), (10, 10, 30, 30), blur_strength=55, elliptical=False)
+    assert out3.shape == frame.shape
+
+
+def test_sensitive_text_tracker_blur_mitigation() -> None:
+    """Verify SensitiveTextTracker with mitigation_style='blur' applies blur_region without TypeError."""
+    initial_frame = np.full((200, 200, 3), 200, dtype=np.uint8)
+    cv2.putText(initial_frame, "BARCODE", (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 2)
+
+    tracker = SensitiveTextTracker(
+        x=20,
+        y=30,
+        w=80,
+        h=30,
+        label="barcode",
+        orig_text="BARCODE",
+        fake_text="REDACTED",
+        initial_frame=initial_frame,
+        mitigation_style="blur",
+        blur_strength=99,
+    )
+
+    frame = initial_frame.copy()
+    result = tracker.apply(frame)
+    assert result.shape == frame.shape
+    assert not np.array_equal(result[30:60, 20:100], initial_frame[30:60, 20:100])

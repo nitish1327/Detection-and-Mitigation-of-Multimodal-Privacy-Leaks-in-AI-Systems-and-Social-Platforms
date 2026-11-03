@@ -268,19 +268,25 @@ def blur_region(
     frame: np.ndarray,
     bbox: Tuple[int, int, int, int],
     strength: int = 99,
+    blur_strength: int | None = None,
+    elliptical: bool = True,
 ) -> np.ndarray:
-    """Apply heavy elliptical Gaussian blur to the bbox region of the frame (in-place).
+    """Apply heavy Gaussian blur to the bbox region of the frame (in-place).
 
-    Expands the bounding box slightly to cover forehead/chin, and uses an
-    elliptical mask with soft edges for a natural-looking, de-identifying blur
-    that renders the person difficult to identify while blending seamlessly.
+    For faces (elliptical=True), expands the bounding box slightly to cover
+    forehead/chin and uses an elliptical mask with soft edges for natural de-identification.
+    For rectangular regions (elliptical=False), blurs the bounding box directly.
+    Accepts both `strength` and `blur_strength` keyword arguments.
     """
+    if blur_strength is not None:
+        strength = blur_strength
+
     fh, fw = frame.shape[:2]
     x, y, w, h = bbox
 
-    # Expand slightly beyond face bbox to cover forehead/chin
-    pad_w = int(w * 0.10)
-    pad_h = int(h * 0.10)
+    # Expand slightly beyond face bbox to cover forehead/chin if elliptical
+    pad_w = int(w * 0.10) if elliptical else 0
+    pad_h = int(h * 0.10) if elliptical else 0
     x1 = max(0, x - pad_w)
     y1 = max(0, y - pad_h)
     x2 = min(fw, x + w + pad_w)
@@ -293,45 +299,49 @@ def blur_region(
     rh, rw = roi.shape[:2]
     min_dim = min(rh, rw)
 
-    # Ensure kernel scales with ROI and is strong enough to obscure facial identity
-    effective_strength = max(strength, 99)
+    # Ensure kernel scales with ROI and is strong enough
+    effective_strength = max(strength, 99 if elliptical else 51)
     k = max(effective_strength, int(min_dim * 0.65))
     if k % 2 == 0:
         k += 1
     blurred = cv2.GaussianBlur(roi, (k, k), 0)
 
-    # Second pass with proportional kernel for thorough obscuration of facial identity
+    # Second pass with proportional kernel for thorough obscuration
     k2 = max(31, (k // 2) | 1)
     blurred = cv2.GaussianBlur(blurred, (k2, k2), 0)
 
-    # Create elliptical mask for smooth blending
-    mask = np.zeros((rh, rw), dtype=np.float32)
-    center = (rw // 2, rh // 2)
-    axes = (int(rw * 0.48), int(rh * 0.48))
-    cv2.ellipse(mask, center, axes, 0, 0, 360, 1.0, -1)
+    if elliptical:
+        # Create elliptical mask for smooth blending
+        mask = np.zeros((rh, rw), dtype=np.float32)
+        center = (rw // 2, rh // 2)
+        axes = (int(rw * 0.48), int(rh * 0.48))
+        cv2.ellipse(mask, center, axes, 0, 0, 360, 1.0, -1)
 
-    # Soft feather at outer edges
-    feather = max(7, min(25, (min_dim // 10) | 1))
-    mask = cv2.GaussianBlur(mask, (feather, feather), 0)
+        # Soft feather at outer edges
+        feather = max(7, min(25, (min_dim // 10) | 1))
+        mask = cv2.GaussianBlur(mask, (feather, feather), 0)
 
-    # Ensure the inner core face region is fully obscured (1.0) to prevent feature leakage
-    inner_axes = (int(rw * 0.38), int(rh * 0.38))
-    cv2.ellipse(mask, center, inner_axes, 0, 0, 360, 1.0, -1)
-    mask = np.clip(mask, 0.0, 1.0)
+        # Ensure the inner core face region is fully obscured (1.0) to prevent feature leakage
+        inner_axes = (int(rw * 0.38), int(rh * 0.38))
+        cv2.ellipse(mask, center, inner_axes, 0, 0, 360, 1.0, -1)
+        mask = np.clip(mask, 0.0, 1.0)
 
-    # If the region touches image borders, ensure full blur coverage at boundary
-    if x1 == 0:
-        mask[:, 0:max(1, pad_w)] = 1.0
-    if x2 == fw:
-        mask[:, -max(1, pad_w):] = 1.0
-    if y1 == 0:
-        mask[0:max(1, pad_h), :] = 1.0
-    if y2 == fh:
-        mask[-max(1, pad_h):, :] = 1.0
+        # If the region touches image borders, ensure full blur coverage at boundary
+        if x1 == 0:
+            mask[:, 0:max(1, pad_w)] = 1.0
+        if x2 == fw:
+            mask[:, -max(1, pad_w):] = 1.0
+        if y1 == 0:
+            mask[0:max(1, pad_h), :] = 1.0
+        if y2 == fh:
+            mask[-max(1, pad_h):, :] = 1.0
 
-    mask_3ch = np.expand_dims(mask, axis=2)
-    blended = (blurred * mask_3ch + roi * (1.0 - mask_3ch)).astype(np.uint8)
-    frame[y1:y2, x1:x2] = blended
+        mask_3ch = np.expand_dims(mask, axis=2)
+        blended = (blurred * mask_3ch + roi * (1.0 - mask_3ch)).astype(np.uint8)
+        frame[y1:y2, x1:x2] = blended
+    else:
+        frame[y1:y2, x1:x2] = blurred
+
     return frame
 
 
@@ -706,6 +716,7 @@ class SensitiveTextTracker:
                 frame,
                 (int(self.x), int(self.y), int(self.w), int(self.h)),
                 blur_strength=self.blur_strength,
+                elliptical=False,
             )
         return render_synthetic_text(
             frame, int(self.x), int(self.y), int(self.w), int(self.h), self.orig_text, self.fake_text
