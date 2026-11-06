@@ -1630,8 +1630,29 @@ class ImageDetector:
                 x, y, w, h = cv2.boundingRect(c)
                 aspect = w / float(h) if h > 0 else 0
                 area = w * h
-                if 1.5 <= aspect <= 7.0 and (img_w * img_h * 0.005) <= area <= (img_w * img_h * 0.25):
-                    if not any(abs(e.bbox.x - x) < 20 and abs(e.bbox.y - y) < 20 for e in results if e.bbox):
+                if 1.5 <= aspect <= 7.0 and (img_w * img_h * 0.005) <= area <= (img_w * img_h * 0.08):
+                    roi_cand = image[y:y+h, x:x+w]
+                    if roi_cand.size == 0:
+                        continue
+                    roi_gray = gray[y:y+h, x:x+w]
+
+                    is_valid = False
+                    if hasattr(self, "_barcode_detector") and self._barcode_detector is not None:
+                        try:
+                            ok_det, _ = self._barcode_detector.detect(roi_cand)
+                            if ok_det:
+                                is_valid = True
+                        except Exception:
+                            pass
+
+                    if not is_valid:
+                        roi_std = float(roi_gray.std())
+                        p90_p10 = float(np.percentile(roi_gray, 90) - np.percentile(roi_gray, 10))
+                        roi_mean = float(roi_gray.mean())
+                        if roi_std >= 65.0 and p90_p10 >= 160.0 and roi_mean >= 90.0:
+                            is_valid = True
+
+                    if is_valid and not any(abs(e.bbox.x - x) < 20 and abs(e.bbox.y - y) < 20 for e in results if e.bbox):
                         results.append(
                             DetectedEntity(
                                 modality=Modality.IMAGE,
@@ -1717,12 +1738,12 @@ class ImageDetector:
         img_area = img_h * img_w
 
         # 1. Signature directly below photo IDs (e.g. passport or identity card holder signature)
-        if face_entities:
+        if face_entities and len(face_entities) == 1:
             for face in face_entities:
                 if not face.bbox or face.confidence < 0.5:
                     continue
                 fb = face.bbox
-                if fb.x > img_w * 0.40:
+                if fb.x > img_w * 0.40 or fb.height > img_h * 0.45:
                     continue
                 sig_y = int(fb.y + fb.height)
                 sig_max_y = int(img_h * 0.77)
@@ -1736,6 +1757,9 @@ class ImageDetector:
                     roi = image[sig_y : sig_y + sig_h, sig_x : sig_x + sig_w]
                     roi_gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
                     bg_val = float(np.percentile(roi_gray, 75))
+                    roi_mean = float(np.mean(roi_gray))
+                    if bg_val < 155.0 or roi_mean < 140.0:
+                        continue
                     dark_thresh = min(150, bg_val - 25)
                     stroke_mask = roi_gray < dark_thresh
                     stroke_count = int(np.count_nonzero(stroke_mask))
